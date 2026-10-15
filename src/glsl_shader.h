@@ -28,6 +28,7 @@ typedef struct GlslUniforms {
   int FrameCount, FrameDirection;
   int ScrollOffset;
   int GameModule;
+  int Sunny;
   int LUTTexCoord;
   int VertexCoord;
   GlslTextureUniform Orig;

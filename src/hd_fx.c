@@ -4,6 +4,7 @@
 #include <math.h>
 #include <string.h>
 #include "hd_fx.h"
+#include "tile_detect.h"
 #include "hd_light.h"
 #include "zelda_rtl.h"
 #include "variables.h"
@@ -457,6 +458,72 @@ static bool IsRaining(int mod) {
   // Prima del salvataggio di Zelda piove nel Mondo della Luce, tranne dove ci
   // sono le nuvole del Monte Morte
   return sram_progress_indicator < 2 && si != 3 && si != 5 && si != 7;
+}
+
+// Acqua: i pixel del fondale che cadono su caselle d'acqua (profonda 0x08,
+// bassa 0x09) vengono marcati con il layer 7, cosi' lo shader sa dove non
+// mettere le pennellate (in Four Swords l'acqua non le ha).
+enum { kLayerWater = 7 };
+
+static bool IsWaterAttr(uint8 a) {
+  return a == 0x08 || a == 0x09;
+}
+
+void HdFx_MarkWater(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y) {
+  int mod;
+  if (!InGameplay(&mod))
+    return;
+  int ext = (width - 256) / 2;
+  for (int layer = 0; layer < 2; layer++) {
+    // all'aperto conta solo il terreno (BG2); nei labirinti anche il piano di sopra (BG1)
+    if (layer == 0 && mod != 7)
+      continue;
+    int cam_x = (layer ? BG2HOFS_copy2 : BG1HOFS_copy2) + bias_x;
+    int cam_y = (layer ? BG2VOFS_copy2 : BG1VOFS_copy2) + bias_y;
+    int x0 = (cam_x - ext) & ~7, y0 = cam_y & ~7;
+    for (int wy = y0; wy < cam_y + height; wy += 8) {
+      for (int wx = x0; wx < cam_x - ext + width; wx += 8) {
+        uint8 attr;
+        if (mod == 7)
+          attr = dung_bg2_attr_table[((wy & 0x1f8) << 3) + ((wx & 0x1f8) >> 3) + (layer ? 0 : 0x1000)];
+        else
+          attr = Overworld_GetTileAttributeAtLocation((uint16)wx >> 3, (uint16)wy);
+        if (!IsWaterAttr(attr))
+          continue;
+        for (int y = wy - cam_y; y < wy - cam_y + 8; y++) {
+          if (y < 0 || y >= height)
+            continue;
+          uint32 *row = (uint32 *)(pixels + y * pitch);
+          for (int x = wx - cam_x + ext; x < wx - cam_x + ext + 8; x++) {
+            if (x < 0 || x >= width)
+              continue;
+            uint32 l = row[x] >> 24;
+            // solo il fondale del layer giusto: HUD (2) e personaggi (4, 6) restano
+            if (l == (uint32)(layer ? 1 : 0) || (layer && l == 5))
+              row[x] = (row[x] & 0x00ffffff) | (uint32)kLayerWater << 24;
+          }
+        }
+      }
+    }
+  }
+}
+
+// All'aperto con il sole: niente pioggia, niente nebbia del Bosco Perduto
+// o della Foresta Maledetta, niente nuvole del Monte della Morte (chiaro e
+// oscuro), niente aree speciali come il bosco della Spada Suprema.
+bool HdFx_SunnyOutdoors(void) {
+  int mod;
+  if (!InGameplay(&mod) || mod != 9 || IsRaining(mod))
+    return false;
+  int si = BYTE(overworld_screen_index);
+  if (si >= 0x80)
+    return false;
+  switch (si) {
+  case 0x00: case 0x03: case 0x05: case 0x07:
+  case 0x40: case 0x43: case 0x45: case 0x47:
+    return false;
+  }
+  return true;
 }
 
 static void ApplyRain(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext,

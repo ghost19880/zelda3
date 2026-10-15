@@ -1,6 +1,7 @@
 // This file is heavily influenced by Snes9x
 #include "third_party/gl_core/gl_core_3_1.h"
 #include "glsl_shader.h"
+#include "hd_fx.h"
 #include "util.h"
 #include "config.h"
 #include <stdio.h>
@@ -358,6 +359,7 @@ static void GlslShader_GetUniforms(GlslShader *gs) {
     p->unif.FrameDirection = glGetUniformLocation(program, "FrameDirection");
     p->unif.ScrollOffset = glGetUniformLocation(program, "ScrollOffset");
     p->unif.GameModule = glGetUniformLocation(program, "GameModule");
+    p->unif.Sunny = glGetUniformLocation(program, "Sunny");
     p->unif.LUTTexCoord = glGetAttribLocation(program, "LUTTexCoord");
     p->unif.VertexCoord = glGetAttribLocation(program, "VertexCoord");
     GlslTextureUniform_Read(program, "Orig", -1, &p->unif.Orig);
@@ -577,6 +579,8 @@ static void GlslShader_SetShaderVars(GlslShader *gs, RenderCtx *ctx, int pass) {
     // +1 cosi che 0 significhi "uniform non valorizzato" (exe vecchio):
     // altrimenti lo shader confonderebbe quel caso col modulo 0 (intro).
     glUniform1f(p->unif.GameModule, (float)(ZeldaModuleForShader() + 1));
+  if (p->unif.Sunny >= 0)
+    glUniform1f(p->unif.Sunny, HdFx_SunnyOutdoors() ? 1.0f : 0.0f);
   RenderCtx_SetTexCoords(ctx, p->unif.LUTTexCoord, ctx->offset);
   RenderCtx_SetTexCoords(ctx, p->unif.VertexCoord, 0);
   RenderCtx_SetGlslTextureUniform(ctx, &p->unif.Orig, gs->pass[0].width, gs->pass[0].height, gs->pass[0].gl_texture);
