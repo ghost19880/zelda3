@@ -15,6 +15,7 @@ Everything is optional and can be turned on or off from the new in-game options 
 - Interactive world map: free scrolling, crosshair, personal markers saved per save file, recenter on Link.
 - Dungeon map shows the dungeon name; faster floor switching.
 - Items assigned to X, L and R shown in the HUD; faster dialogue text while holding A or B.
+- **Modern HUD** (optional): hearts and a thin magic bar top left, Y/A/B buttons top right like on the controller with the item (and its ammo), the sword and the action of the A button (Talk, Read, Open, Lift, Grab, Pull, Throw, Dash, Swim), rupees and dungeon keys bottom left.
 
 **Graphics**
 - Sharp dialogue text drawn on top of any shader.
@@ -35,6 +36,7 @@ To build by hand follow the steps of the original project below; `build_msvc.bat
 
 Fork di [snesrev/zelda3](https://github.com/snesrev/zelda3) con una serie di migliorie "HD" ispirate a *Link's Awakening* per Switch e a *Four Swords Adventures*, più il supporto all'italiano. Ogni miglioria si attiva o disattiva dal nuovo menu opzioni nel gioco (**Esc** o clic della levetta destra) oppure dal [launcher](https://github.com/ghost19880/Zelda-3-Launcher).
 
+- **HUD moderno** (facoltativo): cuori e magia a sinistra, tasti Y/A/B a destra come sul controller con oggetto, spada e la scritta dell'azione del tasto A (Parla, Leggi, Apri, Solleva…), rupie e chiavi in basso a sinistra.
 - **Gioco:** transizioni veloci e continue tra le aree, telecamera fluida, menu opzioni con rimappatura di tastiera e pad, salvataggi automatici e rapidi, mappa del mondo interattiva con segnalini, nome del labirinto sulla mappa, oggetti X/L/R nell'HUD, testo più veloce.
 - **Grafica:** testo nitido nei dialoghi, illuminazione dinamica, braci, raggi dalle finestre, bagliore degli oggetti ricevuti, calore sopra la lava, pioggia e lampi migliorati, e lo shader in stile **Four Swords Adventures** (pennellate, ombre morbide, nuvole).
 - **Italiano:** font con le lettere accentate; la traduzione è nel repository [zelda3-italiano](https://github.com/ghost19880/zelda3-italiano) e la scarica il launcher.

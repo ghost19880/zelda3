@@ -1,3 +1,4 @@
+#include "hd_hud.h"
 #include "sprite.h"
 #include "dungeon.h"
 #include "hud.h"
@@ -928,8 +929,13 @@ int Sprite_ShowSolicitedMessage(int k, uint16 msg) {  // 85e1a7
   static const uint8 kShowMessageFacing_Tab0[4] = {4, 6, 0, 2};
   dialogue_message_index = msg;
   if (!Sprite_CheckDamageToLink_same_layer(k) ||
-      Sprite_CheckIfLinkIsBusy() ||
-      !(filtered_joypad_L & 0x80) ||
+      Sprite_CheckIfLinkIsBusy())
+    return sprite_D[k];
+  // HUD moderno: Link e' nella posizione giusta per parlare (manca solo A)
+  if (!sprite_delay_aux4[k] && link_auxiliary_state != 2 &&
+      link_direction_facing == kShowMessageFacing_Tab0[Sprite_DirectionToFaceLink(k, NULL)])
+    HdHud_CanTalk();
+  if (!(filtered_joypad_L & 0x80) ||
       sprite_delay_aux4[k] || link_auxiliary_state == 2)
     return sprite_D[k];
   uint8 dir = Sprite_DirectionToFaceLink(k, NULL);
