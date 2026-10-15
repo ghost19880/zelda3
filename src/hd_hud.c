@@ -18,6 +18,7 @@
 #include "player.h"
 
 const uint16 *Hud_GetItemIconTiles(int item);
+const uint16 *Hud_GetSwordIconTiles(void);
 
 
 enum {
@@ -105,6 +106,33 @@ static int ComputeAction(void) {
   return kAction_None;
 }
 
+// Azione mostrata: calcolata una volta per frame di gioco, cambia solo dopo
+// che la nuova azione e' rimasta uguale per alcuni frame (niente lampeggi
+// quando il controllo alterna per un attimo fra due risultati)
+static int StableAction(void) {
+  static uint8 last_frame = 0xff;
+  static int shown = kAction_None, candidate = kAction_None, count;
+  if (last_frame == frame_counter)
+    return shown;
+  last_frame = frame_counter;
+  // Solo con Link nel normale controllo: durante transizioni fra schermate,
+  // caricamenti e scene la scritta resta quella di prima
+  if (submodule_index != 0) {
+    candidate = shown, count = 0;
+    return shown;
+  }
+  int a = ComputeAction();
+  if (a == shown) {
+    candidate = a, count = 0;
+  } else if (a == candidate) {
+    if (++count >= 6)
+      shown = a, count = 0;
+  } else {
+    candidate = a, count = 1;
+  }
+  return shown;
+}
+
 static const char *ActionLabel(int a) {
   static const char *const kIt[] = { "", "PARLA", "LEGGI", "APRI", "SOLLEVA", "AFFERRA", "TIRA", "LANCIA", "CORRI", "NUOTA" };
   static const char *const kEn[] = { "", "TALK", "READ", "OPEN", "LIFT", "GRAB", "PULL", "THROW", "DASH", "SWIM" };
@@ -169,86 +197,94 @@ static void DecodeTile(uint16 entry, uint32 *out, int stride) {
   }
 }
 
-// Icona 16x16 di un oggetto (caselle: su-sx, su-dx, giu'-sx, giu'-dx). Lo
-// sfondo nero del riquadro dell'HUD diventa trasparente (solo il nero
-// collegato al bordo: i contorni interni restano). skip_br salta l'ultima
-// casella (nella spada contiene il numero del livello).
-static void DrawIcon(Canvas *cv, int x, int y, const uint16 *t, bool skip_br) {
+// Icona 16x16 di un oggetto (caselle: su-sx, su-dx, giu'-sx, giu'-dx). Il nero
+// e' lo sfondo del riquadro dell'HUD: diventa tutto trasparente, anche quello
+// chiuso dentro l'icona (per esempio fra l'arco e la corda o nel vetro della
+// lanterna), e solo all'esterno dell'icona si aggiunge un contorno nero di 1
+// pixel che la tiene leggibile: i buchi interni restano trasparenti.
+static void DrawIcon(Canvas *cv, int x, int y, const uint16 *t) {
   uint32 img[16 * 16];
   DecodeTile(t[0], img, 16);
   DecodeTile(t[1], img + 8, 16);
   DecodeTile(t[2], img + 8 * 16, 16);
   DecodeTile(t[3], img + 8 * 16 + 8, 16);
-  if (skip_br)
-    for (int r = 8; r < 16; r++)
-      for (int c = 8; c < 16; c++)
-        img[r * 16 + c] = 0;
-  // riempimento dal bordo sui pixel quasi neri
-  uint8 bg[16 * 16] = { 0 };
-  int stack[16 * 16], n = 0;
-  for (int i = 0; i < 16; i++) {
-    stack[n++] = i, stack[n++] = 15 * 16 + i;
-    stack[n++] = i * 16, stack[n++] = i * 16 + 15;
+  for (int i = 0; i < 256; i++) {
+    uint32 c = img[i];
+    if (((c >> 16 & 0xff) + (c >> 8 & 0xff) + (c & 0xff)) < 40)
+      img[i] = 0;
   }
+  // esterno: pixel trasparenti raggiungibili dal bordo (griglia 18x18 con cornice)
+  // (ogni pixel entra nella pila una sola volta: viene segnato quando ci entra)
+  uint8 outside[18 * 18] = { 0 };
+  int stack[18 * 18], n = 0;
+  outside[0] = 1, stack[n++] = 0;
   while (n) {
     int i = stack[--n];
-    if (bg[i])
-      continue;
-    uint32 c = img[i];
-    bool dark = c == 0 || ((c >> 16 & 0xff) + (c >> 8 & 0xff) + (c & 0xff)) < 72;
-    if (!dark)
-      continue;
-    bg[i] = 1;
-    int r = i / 16, col = i % 16;
-    if (r > 0) stack[n++] = i - 16;
-    if (r < 15) stack[n++] = i + 16;
-    if (col > 0) stack[n++] = i - 1;
-    if (col < 15) stack[n++] = i + 1;
+    int nb[4] = { i >= 18 ? i - 18 : -1, i < 17 * 18 ? i + 18 : -1,
+                  i % 18 > 0 ? i - 1 : -1, i % 18 < 17 ? i + 1 : -1 };
+    for (int k = 0; k < 4; k++) {
+      int j = nb[k];
+      if (j < 0 || outside[j])
+        continue;
+      int r = j / 18 - 1, c = j % 18 - 1;
+      if (r >= 0 && r < 16 && c >= 0 && c < 16 && img[r * 16 + c])
+        continue;
+      outside[j] = 1, stack[n++] = j;
+    }
   }
+  for (int r = -1; r <= 16; r++)
+    for (int c = -1; c <= 16; c++) {
+      if (!outside[(r + 1) * 18 + (c + 1)])
+        continue;
+      bool near = false;
+      for (int k = 0; k < 4 && !near; k++) {
+        int rr = r + (k == 0) - (k == 1), cc = c + (k == 2) - (k == 3);
+        near = rr >= 0 && rr < 16 && cc >= 0 && cc < 16 && img[rr * 16 + cc];
+      }
+      if (near)
+        Px(cv, x + c, y + r, 0x101010);
+    }
   for (int i = 0; i < 256; i++)
-    if (!bg[i] && img[i])
+    if (img[i])
       Px(cv, x + i % 16, y + i / 16, img[i]);
 }
 
-// Font 5x7 per le scritte e i numeri piccoli
+// Font 3x5 per le scritte e i numeri piccoli (righe dall'alto, 3 bit)
 static const uint8 *Glyph(char c) {
-  static const uint8 kLetters[26][7] = {
-    {14,17,17,31,17,17,17}, {30,17,17,30,17,17,30}, {14,17,16,16,16,17,14}, {30,17,17,17,17,17,30},
-    {31,16,16,30,16,16,31}, {31,16,16,30,16,16,16}, {14,17,16,23,17,17,15}, {17,17,17,31,17,17,17},
-    {14,4,4,4,4,4,14},      {7,2,2,2,2,18,12},      {17,18,20,24,20,18,17}, {16,16,16,16,16,16,31},
-    {17,27,21,21,17,17,17}, {17,25,21,19,17,17,17}, {14,17,17,17,17,17,14}, {30,17,17,30,16,16,16},
-    {14,17,17,17,21,18,13}, {30,17,17,30,20,18,17}, {15,16,16,14,1,1,30},   {31,4,4,4,4,4,4},
-    {17,17,17,17,17,17,14}, {17,17,17,17,17,10,4},  {17,17,17,21,21,27,17}, {17,17,10,4,10,17,17},
-    {17,17,10,4,4,4,4},     {31,1,2,4,8,16,31},
+  static const uint8 kLetters[26][5] = {
+    {2,5,7,5,5}, {6,5,6,5,6}, {3,4,4,4,3}, {6,5,5,5,6}, {7,4,6,4,7}, {7,4,6,4,4},
+    {3,4,5,5,3}, {5,5,7,5,5}, {7,2,2,2,7}, {1,1,1,5,2}, {5,5,6,5,5}, {4,4,4,4,7},
+    {5,7,7,5,5}, {6,5,5,5,5}, {2,5,5,5,2}, {6,5,6,4,4}, {2,5,5,6,3}, {6,5,6,5,5},
+    {3,4,2,1,6}, {7,2,2,2,2}, {5,5,5,5,7}, {5,5,5,5,2}, {5,5,7,7,5}, {5,5,2,5,5},
+    {5,5,2,2,2}, {7,1,2,4,7},
   };
-  static const uint8 kDigits[10][7] = {
-    {14,17,19,21,25,17,14}, {4,12,4,4,4,4,14}, {14,17,1,2,4,8,31}, {31,2,4,2,1,17,14},
-    {2,6,10,18,31,2,2}, {31,16,30,1,1,17,14}, {6,8,16,30,17,17,14}, {31,1,2,4,8,8,8},
-    {14,17,17,14,17,17,14}, {14,17,17,15,1,2,12},
+  static const uint8 kDigits[10][5] = {
+    {7,5,5,5,7}, {2,6,2,2,7}, {6,1,2,4,7}, {6,1,2,1,6}, {5,5,7,1,1},
+    {7,4,6,1,6}, {3,4,7,5,7}, {7,1,2,2,2}, {7,5,7,5,7}, {7,5,7,1,6},
   };
+  static const uint8 kSlash[5] = { 1, 1, 2, 4, 4 };
   if (c >= 'A' && c <= 'Z') return kLetters[c - 'A'];
   if (c >= '0' && c <= '9') return kDigits[c - '0'];
-  static const uint8 kSlash[7] = { 1, 1, 2, 4, 8, 16, 16 };
   if (c == '/') return kSlash;
   return NULL;
 }
 
 static int SmallTextWidth(const char *s) {
   int n = (int)strlen(s);
-  return n ? n * 6 - 1 : 0;
+  return n ? n * 4 - 1 : 0;
 }
 
-// Testo bianco con contorno scuro
+// Testo chiaro con contorno scuro (alto 5 pixel piu' il contorno)
 static void DrawSmallText(Canvas *cv, int x, int y, const char *s, uint32 color) {
   for (int pass = 0; pass < 2; pass++) {
     int cx = x;
-    for (const char *p = s; *p; p++, cx += 6) {
+    for (const char *p = s; *p; p++, cx += 4) {
       const uint8 *g = Glyph(*p);
       if (!g)
         continue;
-      for (int r = 0; r < 7; r++)
-        for (int c = 0; c < 5; c++) {
-          if (!(g[r] >> (4 - c) & 1))
+      for (int r = 0; r < 5; r++)
+        for (int c = 0; c < 3; c++) {
+          if (!(g[r] >> (2 - c) & 1))
             continue;
           if (pass == 0) {
             for (int dy = -1; dy <= 1; dy++)
@@ -262,69 +298,30 @@ static void DrawSmallText(Canvas *cv, int x, int y, const char *s, uint32 color)
   }
 }
 
-// Tasto del controller in pixel art: colore pieno, luce in alto a sinistra,
-// ombra in basso a destra, bordo scuro
-typedef struct ButtonColors {
-  uint32 light, base, dark, rim;
-} ButtonColors;
+#include "hd_hud_buttons.h"
 
-static const ButtonColors kButtonY = { 0x5ccf74, 0x2a9a46, 0x1b6a30, 0x0c2a14 };  // verde
-static const ButtonColors kButtonA = { 0xe0525c, 0xb01c28, 0x7a1018, 0x2c080a };  // rosso
-static const ButtonColors kButtonB = { 0xf0dc78, 0xc8aa36, 0x8e7420, 0x302808 };  // giallo
-
-static void DrawButton(Canvas *cv, int cx, int cy, int r, const ButtonColors *bc) {
-  for (int dy = -r; dy <= r; dy++)
-    for (int dx = -r; dx <= r; dx++) {
-      float d = sqrtf((float)(dx * dx + dy * dy));
-      if (d > r + 0.4f)
-        continue;
-      uint32 col;
-      if (d > r - 1.0f) {
-        col = bc->rim;
-      } else {
-        float t = (dx + dy) / (2.0f * r);
-        col = t < -0.42f ? bc->light : t > 0.38f ? bc->dark : bc->base;
-      }
-      Px(cv, cx + dx, cy + dy, col);
+// I tre tasti, disposti come li ha disegnati l'utente (pulsanti.png)
+static void DrawButtons(Canvas *cv, int x, int y) {
+  for (int r = 0; r < HD_BUTTONS_H; r++)
+    for (int c = 0; c < HD_BUTTONS_W; c++) {
+      uint32 v = kHdButtons[r * HD_BUTTONS_W + c];
+      if (v >> 24)
+        Px(cv, x + c, y + r, v);
     }
-  // riflesso
-  Px(cv, cx - r / 2, cy - r / 2, 0xffffff);
-  Px(cv, cx - r / 2 + 1, cy - r / 2, bc->light);
-  Px(cv, cx - r / 2, cy - r / 2 + 1, bc->light);
 }
 
-// Spada in pixel art (le caselle dell'icona del menu durante il gioco non
-// sono tutte caricate): lama, guardia e impugnatura con i colori del livello
-static void DrawSword(Canvas *cv, int x, int y, int level) {
-  static const char *const kSword[16] = {
-    "..............o.", ".............obo", "............obBo", "...........obBo.",
-    "..........obBo..", ".........obBo...", "........obBo....", ".......obBo.....",
-    "..oo..obBo......", "..ogoobBo.......", "..oggBBo........", "...oggo.........",
-    "..ohoggo........", ".oho.ogo........", "opo...oo........", "oo..............",
-  };
-  //                          lama chiara lama scura guardia   impugnatura pomo
-  static const uint32 kColors[5][5] = {
-    { 0xe8e8f0, 0x98a0b8, 0x8c6c3c, 0x7a4a20, 0xb89060 },  // (nessuna)
-    { 0xe8e8f0, 0x98a0b8, 0x8c6c3c, 0x7a4a20, 0xb89060 },  // spada del guerriero
-    { 0xf0f4ff, 0x90a8d8, 0x3858d0, 0x6a3a1a, 0xd8b040 },  // Spada Suprema
-    { 0xffc8c0, 0xd05848, 0x3858d0, 0x6a3a1a, 0xd8b040 },  // spada temprata
-    { 0xfff0a0, 0xd0a020, 0xe0b830, 0x6a3a1a, 0xf8e070 },  // spada d'oro
-  };
-  const uint32 *k = kColors[level > 4 ? 4 : level];
-  for (int r = 0; r < 16; r++)
-    for (int c = 0; c < 16; c++) {
-      uint32 col;
-      switch (kSword[r][c]) {
-      case 'o': col = 0x101010; break;
-      case 'b': col = k[0]; break;
-      case 'B': col = k[1]; break;
-      case 'g': col = k[2]; break;
-      case 'h': col = k[3]; break;
-      case 'p': col = k[4]; break;
-      default: continue;
-      }
-      Px(cv, x + c, y + r, col);
+// Primo pixel visibile (riga e colonna) di una casella: serve ad allineare i
+// tasti esattamente al cuore piu' in alto a sinistra
+static void TileFirstPixel(uint16 entry, int *row, int *col) {
+  uint32 img[64];
+  DecodeTile(entry, img, 8);
+  *row = 8, *col = 8;
+  for (int i = 0; i < 64; i++)
+    if (img[i]) {
+      if (i / 8 < *row) *row = i / 8;
+      if (i % 8 < *col) *col = i % 8;
     }
+  if (*row == 8) *row = 0, *col = 0;
 }
 
 static void DrawNumberTiles(Canvas *cv, int x, int y, int value, int digits) {
@@ -350,45 +347,59 @@ void HdHud_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   Canvas cv = { pixels, pitch, width / scale, height / scale, scale };
   int W = cv.width, H = cv.height;
 
-  // --- Cuori (10 per riga) ---------------------------------------------
+  // --- Cuori (caselle originali 8x8, 10 per riga) ------------------------
+  const int x0 = 8, y0 = 8;
   int hearts = link_health_capacity >> 3;
   int hp = (link_health_current + 3) & ~3;
-  int x0 = 8, y0 = 7;
   for (int i = 0; i < hearts; i++) {
     int left = hp - i * 8;
     uint16 t = left >= 8 ? 0x24A0 : left >= 4 ? 0x24A1 : 0x24A2;
     DrawTile(&cv, x0 + (i % 10) * 8, y0 + (i / 10) * 8, t);
   }
   int rows = hearts > 10 ? 2 : 1;
+  // margine vero dei cuori: primo pixel visibile della casella
+  int heart_row, heart_col;
+  TileFirstPixel(0x24A0, &heart_row, &heart_col);
+  int top = y0 + heart_row, margin = x0 + heart_col;
 
-  // --- Magia: barra orizzontale sottile -----------------------------------
+  // --- Magia: barra larga quanto 10 cuori, alta 8, con 1/2 o 1/4 al centro
   {
-    int bx = x0, by = y0 + rows * 8 + 2, bw = 80, bh = 3;
-    int fill = (link_magic_power * bw + 0x7f) / 0x80;
-    if (fill > bw) fill = bw;
-    for (int x = bx - 1; x <= bx + bw; x++)
-      for (int y = by - 1; y <= by + bh; y++) {
-        bool edge = x == bx - 1 || x == bx + bw || y == by - 1 || y == by + bh;
-        uint32 col = edge ? 0x101010 : (x - bx < fill ? (y == by ? 0x88f080 : 0x30b838) : 0x203020);
-        Px(&cv, x, y, col);
+    int bx = x0, by = y0 + rows * 8 + 2, bw = 79, bh = 8;
+    int iw = bw - 4, fill = (link_magic_power * iw + 0x7f) / 0x80;
+    if (fill > iw) fill = iw;
+    for (int y = 0; y < bh; y++)
+      for (int x = 0; x < bw; x++) {
+        uint32 col;
+        bool outer = y == 0 || y == bh - 1 || x == 0 || x == bw - 1;
+        bool inner = y == 1 || y == bh - 2 || x == 1 || x == bw - 2;
+        if (outer)
+          col = 0xd8d8d8;
+        else if (inner)
+          col = 0x585858;
+        else if (x - 2 < fill)
+          col = y == bh - 3 ? 0x00a800 : 0x00d000;
+        else
+          col = 0x100c08;
+        Px(&cv, bx + x, by + y, col);
       }
-    if (link_magic_consumption >= 1)
-      DrawSmallText(&cv, bx + bw + 4, by - 2, link_magic_consumption >= 2 ? "1/4" : "1/2", 0xf8f8f8);
+    if (link_magic_consumption >= 1) {
+      const char *t = link_magic_consumption >= 2 ? "1/4" : "1/2";
+      DrawSmallText(&cv, bx + (bw - SmallTextWidth(t)) / 2, by + 2, t, 0xc8c8c8);
+    }
   }
 
-  // --- Tasti a destra: Y e A in alto, B sotto in mezzo ---------------------
-  int R = 13;
-  int ax = W - 20, ay = 30;
-  int yx = W - 54, yy = 30;
-  int bx = W - 37, by = 55;
-
-  DrawButton(&cv, yx, yy, R, &kButtonY);
-  DrawButton(&cv, ax, ay, R, &kButtonA);
-  DrawButton(&cv, bx, by, R, &kButtonB);
+  // --- Tasti: il punto piu' alto a filo con i cuori, il piu' a destra con
+  // lo stesso margine dei cuori a sinistra
+  const int S = HD_BUTTON_SIZE;
+  int gx = W - margin - HD_BUTTONS_W, gy = top;
+  DrawButtons(&cv, gx, gy);
+  int yx = gx + HD_BUTTON_Y_X, yy = gy + HD_BUTTON_Y_Y;
+  int ax = gx + HD_BUTTON_A_X, ay = gy + HD_BUTTON_A_Y;
+  int bx = gx + HD_BUTTON_B_X, by = gy + HD_BUTTON_B_Y;
 
   // Y: oggetto selezionato, con il numero se e' un consumabile
   if (hud_cur_item) {
-    DrawIcon(&cv, yx - 8, yy - 8, Hud_GetItemIconTiles(hud_cur_item), false);
+    DrawIcon(&cv, yx + 1, yy + 1, Hud_GetItemIconTiles(hud_cur_item));
     int count = -1;
     if (hud_cur_item == 1 && link_item_bow)
       count = link_num_arrows;
@@ -398,32 +409,28 @@ void HdHud_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
       char buf[4];
       int n = count > 99 ? 99 : count;
       buf[0] = '0' + n / 10, buf[1] = '0' + n % 10, buf[2] = 0;
-      const char *s = n < 10 ? buf + 1 : buf;
-      DrawSmallText(&cv, yx + R - SmallTextWidth(s) + 2, yy + 4, s, 0xf8f8f8);
+      const char *t = n < 10 ? buf + 1 : buf;
+      DrawSmallText(&cv, yx + S - SmallTextWidth(t), yy + S - 5, t, 0xf8f8f8);
     }
   }
   // B: spada
   if (link_sword_type && link_sword_type != 0xff)
-    DrawSword(&cv, bx - 8, by - 8, link_sword_type);
-  // A: scritta dell'azione sopra il tasto
+    DrawIcon(&cv, bx + 1, by + 1, Hud_GetSwordIconTiles());  // icona del menu, con il livello
+  // A: scritta dell'azione dentro il tasto rosso
   if (!in_dialog) {
-    const char *label = ActionLabel(ComputeAction());
-    if (*label) {
-      int w = SmallTextWidth(label);
-      int lx = ax - w / 2;
-      if (lx + w > W - 3) lx = W - 3 - w;
-      DrawSmallText(&cv, lx, ay - R - 10, label, 0xf8f8f8);
-    }
+    const char *label = ActionLabel(StableAction());
+    if (*label)
+      DrawSmallText(&cv, ax + (S - SmallTextWidth(label)) / 2, ay + (S - 5) / 2, label, 0xe8e8e8);
   }
 
   // --- Rupie in basso a sinistra, chiavi del labirinto sopra ---------------
   if (!in_dialog) {
-    int ry = H - 16;
-    DrawTile(&cv, 8, ry, 0x3ca8);
-    DrawNumberTiles(&cv, 18, ry, link_rupees_actual, 3);
+    int ry = H - margin - 8;
+    DrawTile(&cv, x0, ry, 0x3ca8);
+    DrawNumberTiles(&cv, x0 + 10, ry, link_rupees_actual, 3);
     if (link_num_keys != 0xff) {
-      DrawTile(&cv, 8, ry - 11, 0x2871);
-      DrawNumberTiles(&cv, 18, ry - 11, link_num_keys, 1);
+      DrawTile(&cv, x0, ry - 10, 0x2871);
+      DrawNumberTiles(&cv, x0 + 10, ry - 10, link_num_keys, 1);
     }
   }
 }
