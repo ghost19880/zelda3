@@ -14,6 +14,7 @@
 #include "assets.h"
 #include "hd_light.h"
 #include "hd_fx.h"
+#include "hd_hud.h"
 ZeldaEnv g_zenv;
 uint8 g_ram[131072];
 
@@ -293,6 +294,7 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
   int height = render_flags & kPpuRenderFlags_Height240 ? 240 : 224;
 
   HdLight_BeforeRender(g_zenv.ppu);
+  HdHud_BeforeRender(g_zenv.ppu);
 
   for (int i = 0; i <= height; i++) {
     if (i == 128 && irq_flag) {

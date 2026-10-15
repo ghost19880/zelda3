@@ -513,6 +513,8 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       return ParseBoolBit(value, &g_config.features0, kFeatures0_FastTransitions);
     } else if (StringEqualsNoCase(key, "ContinuousTransitions")) {
       return ParseBoolBit(value, &g_config.features0, kFeatures0_ContinuousTransitions);
+    } else if (StringEqualsNoCase(key, "ModernHud")) {
+      return ParseBoolBit(value, &g_config.features0, kFeatures0_ModernHud);
     } else if (StringEqualsNoCase(key, "ShowXLRItemsInHud")) {
       return ParseBoolBit(value, &g_config.features0, kFeatures0_ShowXLRItemsInHud);
     } else if (StringEqualsNoCase(key, "TextSpeed")) {

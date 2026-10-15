@@ -911,6 +911,18 @@ void Hud_SearchForEquippedItem() {  // 8de399
   }
 }
 
+static const ItemBoxGfx *Hud_GetIconForItem(int i);
+
+// Per l'HUD moderno (hd_hud.c): le quattro caselle dell'icona di un oggetto
+// e quelle della spada attuale
+const uint16 *Hud_GetItemIconTiles(int item) {
+  return Hud_GetIconForItem(item)->v;
+}
+
+const uint16 *Hud_GetSwordIconTiles(void) {
+  return kHudItemSword[link_sword_type == 0xff || link_sword_type > 4 ? 0 : link_sword_type].v;
+}
+
 static const ItemBoxGfx *Hud_GetIconForItem(int i) {
   if (i <= 0)
     return kHudItemEmpty;

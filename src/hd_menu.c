@@ -15,6 +15,7 @@
 #include "snes/ppu.h"
 #include "hd_light.h"
 #include "hd_fx.h"
+#include "hd_hud.h"
 
 void ZeldaApuLock();
 void ZeldaApuUnlock();
@@ -69,6 +70,7 @@ typedef struct FeatureOption {
 static const FeatureOption kFeatureOptions[] = {
   { "Transizioni veloci", "FastTransitions", kFeatures0_FastTransitions },
   { "Transizione continua tra aree", "ContinuousTransitions", kFeatures0_ContinuousTransitions },
+  { "HUD moderno", "ModernHud", kFeatures0_ModernHud },
   { "Oggetti X, L, R nell'HUD", "ShowXLRItemsInHud", kFeatures0_ShowXLRItemsInHud },
   { "Cambio oggetti con L e R", "ItemSwitchLR", kFeatures0_SwitchLR },
   { "Raccogli oggetti con la spada", "CollectItemsWithSword", kFeatures0_CollectItemsWithSword },
@@ -788,6 +790,7 @@ void HdMenu_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   if (!g_menu_open) {
     if (!g_font_data)
       Font_Load();
+    HdHud_Draw(pixels, pitch, width, height, scale);
     DrawDungeonMapStatus(&cv);
     DrawMessage(&cv);
     return;
