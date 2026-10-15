@@ -2,7 +2,7 @@
 REM Compila zelda3.exe con Visual Studio 2022 Build Tools (x64, ottimizzato).
 REM Uso: build_msvc.bat   -> produce zelda3.exe nella cartella corrente.
 setlocal
-set SDL2=third_party\SDL2-2.26.3
+set SDL2=third_party\SDL2-2.28.2
 set VCVARS="C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 call %VCVARS% >nul || exit /b 1
 
