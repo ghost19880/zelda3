@@ -42,6 +42,10 @@ typedef struct MenuItem {
   int id;
 } MenuItem;
 
+// Testi del menu: scritti in italiano, in inglese con le altre lingue
+static const char *Tr(const char *it);
+static bool IsItalian();
+
 static bool g_menu_open;
 static int g_page;
 static int g_cursor[6];
@@ -261,11 +265,14 @@ static bool FileTime(const char *name, time_t *t) {
 static void FormatFileTime(const char *name, char *buf, size_t size) {
   time_t t;
   if (!FileTime(name, &t)) {
-    snprintf(buf, size, "vuoto");
+    snprintf(buf, size, "%s", Tr("vuoto"));
     return;
   }
   struct tm *tm = localtime(&t);
-  snprintf(buf, size, "%02d.%02d  ore %02d.%02d", tm->tm_mday, tm->tm_mon + 1, tm->tm_hour, tm->tm_min);
+  if (IsItalian())
+    snprintf(buf, size, "%02d.%02d  ore %02d.%02d", tm->tm_mday, tm->tm_mon + 1, tm->tm_hour, tm->tm_min);
+  else
+    snprintf(buf, size, "%02d/%02d  %02d:%02d", tm->tm_mday, tm->tm_mon + 1, tm->tm_hour, tm->tm_min);
 }
 
 static int AutosaveCount() {
@@ -293,7 +300,7 @@ static int FindAutosave(bool newest) {
 }
 
 static void ShowMessage(const char *msg) {
-  snprintf(g_message, sizeof(g_message), "%s", msg);
+  snprintf(g_message, sizeof(g_message), "%s", Tr(msg));
   g_message_timer = 150;
 }
 
@@ -358,7 +365,7 @@ static void QuickSlotAction(int slot) {
   SaveLoadSlot(g_slot_action_save ? kSaveLoad_Save : kSaveLoad_Load, slot);
   ZeldaApuUnlock();
   char msg[64];
-  snprintf(msg, sizeof(msg), g_slot_action_save ? "Salvato nello slot %d" : "Slot %d caricato", slot + 1);
+  snprintf(msg, sizeof(msg), Tr(g_slot_action_save ? "Salvato nello slot %d" : "Slot %d caricato"), slot + 1);
   ShowMessage(msg);
   if (!g_slot_action_save) {
     g_autosave_last_key = -1;
@@ -383,6 +390,118 @@ void HdMenu_ApplyConfig() {
 
 static bool IsItalian() {
   return g_config.language && StringEqualsNoCase(g_config.language, "it");
+}
+
+static const char *Tr(const char *it) {
+  static const char *const kTr[][2] = {
+    { "Transizioni veloci", "Fast transitions" },
+    { "Transizione continua tra aree", "Continuous area transitions" },
+    { "Mondo continuo all'esterno", "Continuous overworld" },
+    { "HUD moderno", "Modern HUD" },
+    { "Oggetti X, L, R nell'HUD", "X, L, R items in the HUD" },
+    { "Cambio oggetti con L e R", "Switch items with L and R" },
+    { "Raccogli oggetti con la spada", "Collect items with the sword" },
+    { "Rompi vasi con la spada", "Break pots with the sword" },
+    { "Sterza durante lo scatto", "Turn while dashing" },
+    { "Fino a 4 bombe insieme", "Up to 4 bombs at once" },
+    { "Massimi in giallo nell'HUD", "Maximums in yellow in the HUD" },
+    { "Disattiva bip vita bassa", "Disable low health beep" },
+    { "Annulla il volo con X", "Cancel bird travel with X" },
+    { "Specchio verso le Tenebre", "Mirror to the Dark World" },
+    { "Correzioni di bug", "Bug fixes" },
+    { "Su", "Up" },
+    { "Gi\xc3\xb9", "Down" },
+    { "Sinistra", "Left" },
+    { "Destra", "Right" },
+    { "Spenta", "Off" },
+    { "Leggera", "Light" },
+    { "Media", "Medium" },
+    { "Forte", "Strong" },
+    { "Originale", "Original" },
+    { "Veloce con A o B", "Fast with A or B" },
+    { "Istantanea", "Instant" },
+    { "Grafica", "Graphics" },
+    { "Gioco", "Game" },
+    { "Controlli", "Controls" },
+    { "Salvataggi", "Saves" },
+    { "Opzioni", "Options" },
+    { "Riprendi", "Resume" },
+    { "Esci dal gioco", "Quit game" },
+    { "Telecamera fluida", "Smooth camera" },
+    { "Schermo intero", "Fullscreen" },
+    { "Mappa del mondo in HD", "HD world map" },
+    { "Mostra FPS", "Show FPS" },
+    { "Testo nitido nei dialoghi", "Sharp dialogue text" },
+    { "Fluidit\xc3\xa0 oltre i 60 Hz", "Smoothness above 60 Hz" },
+    { "Illuminazione dinamica", "Dynamic lighting" },
+    { "Braci dalle fiamme", "Embers from flames" },
+    { "Raggi dalle finestre", "Light rays from windows" },
+    { "Bagliore degli oggetti ricevuti", "Glow of received items" },
+    { "Calore sopra la lava", "Heat haze over lava" },
+    { "Pioggia e lampi migliorati", "Improved rain and lightning" },
+    { "Sfocatura dietro menu e dialoghi", "Blur behind menus and dialogues" },
+    { "Ombre di personaggi e nemici", "Shadows of characters and enemies" },
+    { "Cerchio di transizione morbido", "Soft transition circle" },
+    { "Suggerimenti dei tasti", "Button hints" },
+    { "Velocit\xc3\xa0 del testo", "Text speed" },
+    { "Lingua dei dialoghi", "Dialogue language" },
+    { "Musica orchestrale MSU", "MSU orchestral music" },
+    { "(al riavvio)", "(on restart)" },
+    { "Menu opzioni", "Options menu" },
+    { "Ripristina tasti predefiniti", "Restore default keys" },
+    { "Salva a ogni cambio di area", "Save on every area change" },
+    { "Salvataggi automatici da tenere", "Autosaves to keep" },
+    { "Carica l'ultimo automatico", "Load the latest autosave" },
+    { "Azione sugli slot", "Slot action" },
+    { "Salva", "Save" },
+    { "Carica", "Load" },
+    { "vuoto", "empty" },
+    { "S\xc3\xac", "Yes" },
+    { "Nessun salvataggio automatico", "No autosave" },
+    { "Salvataggio automatico caricato", "Autosave loaded" },
+    { "Caricamento non riuscito", "Loading failed" },
+    { "Lo slot e' vuoto", "The slot is empty" },
+    { "Salvato nello slot %d", "Saved to slot %d" },
+    { "Slot %d caricato", "Slot %d loaded" },
+    { "Tasti predefiniti ripristinati", "Default keys restored" },
+    { "Scegli", "Select" },
+    { "Chiudi", "Close" },
+    { "Riordina", "Sort" },
+    { "Segnalino", "Marker" },
+    { "Centra su Link", "Center on Link" },
+    { "Veloce", "Fast" },
+    { "Riduci", "Zoom out" },
+    { "Ingrandisci", "Zoom in" },
+    { "Cambia piano", "Change floor" },
+    { "Croce", "D-pad" },
+    { "Frecce", "Arrows" },
+    { "Fogne del castello", "Sewers" },
+    { "Castello di Hyrule", "Hyrule Castle" },
+    { "Palazzo dell'Est", "Eastern Palace" },
+    { "Castello di Sabbia", "Desert Palace" },
+    { "Sala superiore del castello", "Agahnim's Tower" },
+    { "Dedalo d'Acqua", "Swamp Palace" },
+    { "Palazzo Cupo", "Palace of Darkness" },
+    { "Malapalude", "Misery Mire" },
+    { "Bosco d'Ossa", "Skull Woods" },
+    { "Forte Ghiaccio", "Ice Palace" },
+    { "Torre di Hera", "Tower of Hera" },
+    { "Villaggio dei Ladroni", "Thieves' Town" },
+    { "Rocca Tartaruga", "Turtle Rock" },
+    { "Torre di Ganon", "Ganon's Tower" },
+    { "Premi il nuovo tasto o pulsante  (Esc o Back annulla)", "Press the new key or button  (Esc or Back cancels)" },
+    { "A conferma   B indietro   Sinistra e Destra cambiano", "A confirm   B back   Left and Right change" },
+    { "Segnalino tolto", "Marker removed" },
+    { "Troppi segnalini, togline qualcuno", "Too many markers, remove some" },
+    { "Segnalino aggiunto", "Marker added" },
+    { "A segnalino   Y centra su Link   tieni B per scorrere veloce", "A marker   Y center on Link   hold B to scroll fast" },
+  };
+  if (IsItalian())
+    return it;
+  for (int i = 0; i < countof(kTr); i++)
+    if (!strcmp(it, kTr[i][0]))
+      return kTr[i][1];
+  return it;
 }
 
 static void SetFeature(uint32 bit, bool on) {
@@ -458,8 +577,8 @@ static void SaveSettings() {
 static MenuItem *AddItem(int id, const char *label, const char *value) {
   MenuItem *it = &g_items[g_num_items++];
   it->id = id;
-  snprintf(it->label, sizeof(it->label), "%s", label);
-  snprintf(it->value, sizeof(it->value), "%s", value ? value : "");
+  snprintf(it->label, sizeof(it->label), "%s", Tr(label));
+  snprintf(it->value, sizeof(it->value), "%s", value ? Tr(value) : "");
   return it;
 }
 
@@ -494,7 +613,7 @@ static void BuildItems() {
   case kPage_Graphics:
     AddItem(0, "Telecamera fluida", kSmoothCameraNames[g_config.smooth_camera & 3]);
     AddItem(1, "Schermo intero", YesNo(Host_IsFullscreen()));
-    snprintf(buf, sizeof(buf), "%s%s", YesNo(g_config.enhanced_mode7), Host_IsOpenGL() ? "" : " (al riavvio)");
+    snprintf(buf, sizeof(buf), "%s%s%s", Tr(YesNo(g_config.enhanced_mode7)), Host_IsOpenGL() ? "" : " ", Host_IsOpenGL() ? "" : Tr("(al riavvio)"));
     AddItem(2, "Mappa del mondo in HD", buf);
     AddItem(3, "Mostra FPS", YesNo(Host_GetDisplayPerf()));
     AddItem(4, "Testo nitido nei dialoghi", YesNo(g_config.hd_text));
@@ -519,7 +638,7 @@ static void BuildItems() {
   case kPage_Audio:
     snprintf(buf, sizeof(buf), "%d%%", Host_GetVolume());
     AddItem(0, "Volume", buf);
-    snprintf(buf, sizeof(buf), "%s (al riavvio)", YesNo(g_msu_on));
+    snprintf(buf, sizeof(buf), "%s %s", Tr(YesNo(g_msu_on)), Tr("(al riavvio)"));
     AddItem(1, "Musica orchestrale MSU", buf);
     break;
   case kPage_Controls:
@@ -841,14 +960,14 @@ enum { kBtn_Dpad = -1, kBtn_Select = 4, kBtn_Start = 5, kBtn_A = 6, kBtn_B = 7, 
 static void ButtonName(int btn, char *buf, size_t size) {
   if (btn == kBtn_Dpad) {
     if (g_last_input_pad) {
-      snprintf(buf, size, "Croce");
+      snprintf(buf, size, "%s", Tr("Croce"));
       return;
     }
     char k[4][48];
     for (int i = 0; i < 4; i++)
       Config_KeyName(Config_GetKeyForCmd(kKeys_Controls + i), k[i], sizeof(k[i]));
     if (!strcmp(k[0], "Up") && !strcmp(k[1], "Down") && !strcmp(k[2], "Left") && !strcmp(k[3], "Right"))
-      snprintf(buf, size, "Frecce");
+      snprintf(buf, size, "%s", Tr("Frecce"));
     else
       snprintf(buf, size, "%s %s %s %s", k[0], k[2], k[1], k[3]);
     return;
@@ -863,7 +982,7 @@ static void ButtonName(int btn, char *buf, size_t size) {
     { "Return", "Invio" }, { "Right Shift", "Maiusc dx" }, { "Left Shift", "Maiusc sx" },
     { "Space", "Spazio" }, { "Backspace", "Canc" }, { "Right Ctrl", "Ctrl dx" }, { "Left Ctrl", "Ctrl sx" },
   };
-  for (int i = 0; i < countof(kNames); i++)
+  for (int i = 0; i < countof(kNames) && IsItalian(); i++)
     if (!strcmp(k, kNames[i][0])) {
       snprintf(buf, size, "%s", kNames[i][1]);
       return;
@@ -893,7 +1012,7 @@ static void DrawHints(Canvas *cv, const Hint *h, int n, int bottom) {
   int total = 0;
   for (int i = 0; i < n; i++) {
     ButtonName(h[i].btn, names[i], sizeof(names[i]));
-    total += TextWidth(names[i]) + 8 + 4 + TextWidth(h[i].label) + (i ? 14 : 0);
+    total += TextWidth(names[i]) + 8 + 4 + TextWidth(Tr(h[i].label)) + (i ? 14 : 0);
   }
   int x = (cv->width - total) / 2, y = cv->height - bottom;
   DrawPanel(cv, x - 8, y - 2, total + 16, 20, 0x101020, 0.70f);
@@ -905,7 +1024,7 @@ static void DrawHints(Canvas *cv, const Hint *h, int n, int bottom) {
     DrawPanel(cv, x + 1, y + 2, kw - 2, 12, 0x383848, 1.0f);
     DrawText(cv, x + 4, y - 1, names[i], 0xf8f8f8);
     x += kw + 4;
-    x = DrawText(cv, x, y - 1, h[i].label, 0xf8e070);
+    x = DrawText(cv, x, y - 1, Tr(h[i].label), 0xf8e070);
   }
 }
 
@@ -916,14 +1035,14 @@ static void DrawHintColumn(Canvas *cv, const Hint *h, int n, int cx) {
   for (int i = 0; i < n; i++, y += 40) {
     char name[48];
     ButtonName(h[i].btn, name, sizeof(name));
-    int kw = TextWidth(name) + 8, lw = TextWidth(h[i].label);
+    int kw = TextWidth(name) + 8, lw = TextWidth(Tr(h[i].label));
     int pw = (kw > lw ? kw : lw) + 12;
     DrawPanel(cv, cx - pw / 2, y - 3, pw, 37, 0x101020, 0.70f);
     int kx = cx - kw / 2;
     DrawPanel(cv, kx, y, kw, 14, 0xe0e0e8, 1.0f);
     DrawPanel(cv, kx + 1, y + 1, kw - 2, 12, 0x383848, 1.0f);
     DrawText(cv, kx + 4, y - 2, name, 0xf8f8f8);
-    DrawText(cv, cx - lw / 2, y + 15, h[i].label, 0xf8e070);
+    DrawText(cv, cx - lw / 2, y + 15, Tr(h[i].label), 0xf8e070);
   }
 }
 
@@ -1036,7 +1155,7 @@ static void DrawDungeonMapStatus(Canvas *cv) {
   int dung = cur_palace_index_x2 >> 1;
   if (dung < 0 || dung >= 14)
     return;
-  const char *name = kDungeonNames[dung];
+  const char *name = Tr(kDungeonNames[dung]);
   int w = TextWidth(name);
   int x = (cv->width - w) / 2;
   Canvas_Rect(cv, x - 8, cv->height - 20, w + 16, 18, 0x101830);
@@ -1077,7 +1196,7 @@ void HdMenu_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
 
   // Titolo
   Canvas_Rect(&cv, panel_x, top, panel_w, 20, 0x30285c);
-  const char *title = PageTitle();
+  const char *title = Tr(PageTitle());
   DrawText(&cv, panel_x + (panel_w - TextWidth(title)) / 2, top + 1, title, 0xf8d878);
 
   int y = top + 24;
@@ -1100,9 +1219,9 @@ void HdMenu_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
     DrawText(&cv, panel_x + panel_w - 14, cv.height - 38, "\xe2\x86\x93", 0xf8f8f8);
 
   // Riga di aiuto
-  const char *help = g_capture >= 0 ?
+  const char *help = Tr(g_capture >= 0 ?
       "Premi il nuovo tasto o pulsante  (Esc o Back annulla)" :
-      "A conferma   B indietro   Sinistra e Destra cambiano";
+      "A conferma   B indietro   Sinistra e Destra cambiano");
   int hw = TextWidth(help);
   if (g_capture >= 0)
     Canvas_Rect(&cv, (cv.width - hw) / 2 - 8, cv.height - 22, hw + 16, 20, 0x803020);
