@@ -37,7 +37,8 @@ static bool ModernHudOn(void) {
 static bool HudContext(bool *in_dialog) {
   int mod = main_module_index;
   *in_dialog = false;
-  if (mod == 7 || mod == 9)
+  // 15 e 16: il cerchio che si chiude e si riapre entrando e uscendo
+  if (mod == 7 || mod == 9 || mod == 15 || mod == 16)
     return true;
   if (mod == 14 && submodule_index == 2 && (saved_module_for_menu == 7 || saved_module_for_menu == 9)) {
     *in_dialog = true;
@@ -46,9 +47,16 @@ static bool HudContext(bool *in_dialog) {
   return false;
 }
 
+// Inventario e menu di salvataggio aperti durante il gioco: l'HUD originale
+// scorrerebbe insieme ai riquadri, quindi resta nascosto anche li'
+static bool InGameMenu(void) {
+  return main_module_index == 14 && (submodule_index == 1 || submodule_index == 11) &&
+         (saved_module_for_menu == 7 || saved_module_for_menu == 9);
+}
+
 void HdHud_BeforeRender(Ppu *ppu) {
   bool dlg;
-  bool active = ModernHudOn() && HudContext(&dlg);
+  bool active = ModernHudOn() && (HudContext(&dlg) || InGameMenu());
   uint16 *v = &ppu->vram[word_7E0219 & 0x7fff];
   if (active) {
     for (int i = 0; i < 165 && (word_7E0219 & 0x7fff) + i < 0x8000; i++)
@@ -146,9 +154,11 @@ static const char *ActionLabel(int a) {
 typedef struct Canvas {
   uint8 *pixels;
   int pitch, width, height, scale;
+  int oy;  // spostamento verticale (HUD che scivola fuori dallo schermo)
 } Canvas;
 
 static void Px(Canvas *cv, int x, int y, uint32 color) {
+  y += cv->oy;
   if ((unsigned)x >= (unsigned)cv->width || (unsigned)y >= (unsigned)cv->height)
     return;
   int s = cv->scale;
@@ -344,7 +354,23 @@ void HdHud_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   Ppu *ppu = g_zenv.ppu;
   if (!(ppu->screenEnabled[0] & 4) || ppu->mode == 7)
     return;  // il gioco stesso non mostra l'HUD (scene, mappa...)
-  Canvas cv = { pixels, pitch, width / scale, height / scale, scale };
+  // Nei dialoghi l'HUD scivola fuori dallo schermo (in alto i cuori e i
+  // tasti, in basso rupie e chiavi) e rientra quando il dialogo finisce
+  static float slide;
+  static uint8 last_frame;
+  if (last_frame != frame_counter) {
+    last_frame = frame_counter;
+    float target = in_dialog ? 1.0f : 0.0f;
+    slide += (target > slide ? 1.0f : -1.0f) / 10.0f;
+    if (slide < 0) slide = 0;
+    if (slide > 1) slide = 1;
+  }
+  float ease = slide * slide * (3 - 2 * slide);
+  if (ease >= 1.0f)
+    return;
+  Canvas cv = { pixels, pitch, width / scale, height / scale, scale, -(int)(ease * 48 + 0.5f) };
+  Canvas cvb = cv;
+  cvb.oy = (int)(ease * 32 + 0.5f);
   int W = cv.width, H = cv.height;
 
   // --- Cuori (caselle originali 8x8, 10 per riga) ------------------------
@@ -424,13 +450,13 @@ void HdHud_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   }
 
   // --- Rupie in basso a sinistra, chiavi del labirinto sopra ---------------
-  if (!in_dialog) {
+  {
     int ry = H - margin - 8;
-    DrawTile(&cv, x0, ry, 0x3ca8);
-    DrawNumberTiles(&cv, x0 + 10, ry, link_rupees_actual, 3);
+    DrawTile(&cvb, x0, ry, 0x3ca8);
+    DrawNumberTiles(&cvb, x0 + 10, ry, link_rupees_actual, 3);
     if (link_num_keys != 0xff) {
-      DrawTile(&cv, x0, ry - 10, 0x2871);
-      DrawNumberTiles(&cv, x0 + 10, ry - 10, link_num_keys, 1);
+      DrawTile(&cvb, x0, ry - 10, 0x2871);
+      DrawNumberTiles(&cvb, x0 + 10, ry - 10, link_num_keys, 1);
     }
   }
 }
