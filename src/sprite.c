@@ -1,3 +1,4 @@
+#include "hd_world.h"
 #include "hd_hud.h"
 #include "sprite.h"
 #include "dungeon.h"
@@ -3721,6 +3722,7 @@ void Sprite_ReloadAll_Overworld() {  // 89c499
 void Sprite_OverworldReloadAll_justLoad() {  // 89c49d
   Sprite_ResetAll_noDisable();
   Overworld_LoadSprites();
+  HdWorld_RestoreKilled();  // mondo persistente: i nemici sconfitti restano sconfitti
   Sprite_ActivateAllProxima();
 }
 
