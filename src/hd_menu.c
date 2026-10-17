@@ -57,8 +57,9 @@ static char g_message[96];
 static int g_message_timer;
 static int g_save_icon_timer;  // icona del salvataggio automatico
 static bool g_last_input_pad;  // ultimo tasto premuto sul pad (non sulla tastiera)
-static bool g_controls_dirty, g_msu_dirty;
+static bool g_controls_dirty, g_msu_dirty, g_lang_dirty;
 static bool g_msu_on;
+static uint8 g_msu_mode;  // modalita' dell'ini (deluxe, opuz...) da riscrivere riaccendendo la musica
 static uint8 g_last_stick;
 
 static MenuItem g_items[kMaxItems];
@@ -380,6 +381,8 @@ void HdMenu_ApplyConfig() {
   g_smooth_camera = g_config.smooth_camera;
   g_text_speed = g_config.text_speed;
   g_msu_on = g_config.enable_msu != 0;
+  if (g_msu_on)
+    g_msu_mode = g_config.enable_msu;
   g_dynamic_light = g_config.dynamic_light;
   g_fx_embers = g_config.fx_embers, g_fx_window_rays = g_config.fx_window_rays;
   g_fx_item_glow = g_config.fx_item_glow;
@@ -535,14 +538,25 @@ static void SaveSettings() {
   AddIni(v, &n, "[Graphics]", "FxButtonHints", "%d", g_config.fx_button_hints);
   AddIni(v, &n, "[General]", "AutosaveOnAreaChange", "%d", g_config.autosave_areas);
   AddIni(v, &n, "[General]", "AutosaveSlots", "%d", AutosaveCount());
-  v[n].section = "[General]", v[n].key = "Language";
-  snprintf(v[n].value, sizeof(v[n].value), "%s", IsItalian() ? "it" : "us"), n++;
+  // La lingua si scrive solo se cambiata dal menu (altrimenti resta quella
+  // dell'ini, anche de, fr...)
+  if (g_lang_dirty) {
+    v[n].section = "[General]", v[n].key = "Language";
+    snprintf(v[n].value, sizeof(v[n].value), "%s", g_config.language ? g_config.language : "us"), n++;
+  }
   for (int i = 0; i < countof(kFeatureOptions); i++)
     AddIni(v, &n, "[Features]", kFeatureOptions[i].ini_key, "%d", (g_config.features0 & kFeatureOptions[i].bit) != 0);
   AddIni(v, &n, "[Features]", "TextSpeed", "%d", g_config.text_speed);
   if (g_msu_dirty) {
     v[n].section = "[Sound]", v[n].key = "EnableMSU";
-    snprintf(v[n].value, sizeof(v[n].value), "%s", g_msu_on ? "true" : "false"), n++;
+    const char *mode = "true";
+    if ((g_msu_mode & (kMsuEnabled_MsuDeluxe | kMsuEnabled_Opuz)) == (kMsuEnabled_MsuDeluxe | kMsuEnabled_Opuz))
+      mode = "deluxe-opuz";
+    else if (g_msu_mode & kMsuEnabled_MsuDeluxe)
+      mode = "deluxe";
+    else if (g_msu_mode & kMsuEnabled_Opuz)
+      mode = "opuz";
+    snprintf(v[n].value, sizeof(v[n].value), "%s", g_msu_on ? mode : "false"), n++;
   }
   if (g_controls_dirty) {
     char buf[160], name[48];
@@ -713,6 +727,7 @@ static void Activate(int id, int dir) {
       g_text_speed = g_config.text_speed;
     } else if (id == 101) {
       g_config.language = IsItalian() ? "us" : "it";
+      g_lang_dirty = true;
       ZeldaSetLanguage(g_config.language);
       Font_Load();
     } else {
@@ -820,7 +835,8 @@ bool HdMenu_HandleKey(int code, int mod, bool pressed) {
     if (code == SDLK_ESCAPE) {
       g_capture = -1;
     } else if (code != SDLK_LSHIFT && code != SDLK_RSHIFT && code != SDLK_LCTRL &&
-               code != SDLK_RCTRL && code != SDLK_LALT && code != SDLK_RALT) {
+               code != SDLK_RCTRL && code != SDLK_LALT && code != SDLK_RALT &&
+               code != SDLK_COMMA) {  // la virgola separa i tasti nella riga Controls dell'ini
       Config_SetKeyForCmd(g_capture == 12 ? kKeys_HdMenu : kKeys_Controls + g_capture, code, mod);
       g_controls_dirty = true;
       g_capture = -1;

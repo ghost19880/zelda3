@@ -5,6 +5,9 @@
 #include <SDL.h>
 #include "features.h"
 #include "util.h"
+#ifdef _WIN32
+__declspec(dllimport) int __stdcall MoveFileExA(const char *from, const char *to, unsigned long flags);
+#endif
 
 enum {
   kKeyMod_ScanCode = 0x200,
@@ -811,11 +814,22 @@ bool Config_WriteIniValues(const IniValue *values, int count) {
     OutBuf_AddStr(&b, nl);
     FlushSection(&b, values, done, count, values[k].section, nl);
   }
+  // Si scrive prima un file temporaneo e lo si mette al posto dell'ini solo
+  // se la scrittura e' riuscita: l'ini dell'utente non resta mai a meta'
   bool ok = false;
-  FILE *f = fopen(g_config_filename, "wb");
+  char tmp[1024];
+  snprintf(tmp, sizeof(tmp), "%s.tmp", g_config_filename);
+  FILE *f = fopen(tmp, "wb");
   if (f) {
     ok = fwrite(b.data, 1, b.len, f) == b.len;
-    fclose(f);
+    ok = (fclose(f) == 0) && ok;
+#ifdef _WIN32
+    ok = ok && MoveFileExA(tmp, g_config_filename, 1 /* MOVEFILE_REPLACE_EXISTING */);
+#else
+    ok = ok && rename(tmp, g_config_filename) == 0;
+#endif
+    if (!ok)
+      remove(tmp);
   }
   free(b.data);
   free(done);
