@@ -485,6 +485,13 @@ int HdFx_SceneModule(void) {
     // e' gia' caricata e compare, poi scende l'uccello. In mezzo c'e' la mappa
     if (sub == 10 && (overworld_map_state == 0 || overworld_map_state >= 7))
       return 9;
+    // mappa del mondo: nella fase 0 il mondo si scurisce ancora sotto
+    if (sub == 7 && overworld_map_state == 0)
+      return saved_module_for_menu;
+    // mappa del labirinto: il labirinto si scurisce (0) e, alla chiusura, si
+    // ricarica e si riaccende (dalla fase 6)
+    if (sub == 3 && (overworld_map_state == 0 || overworld_map_state >= 6))
+      return saved_module_for_menu;
     return 14;
   }
   // cerchio che si chiude (15) o si riapre (16): la scena dentro o fuori

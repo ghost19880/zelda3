@@ -1155,16 +1155,13 @@ static void DrawButtonHints(Canvas *cv) {
       right[nr++] = (Hint){ kBtn_Select, "Salva" };
     if (enhanced_features0 & kFeatures0_SwitchLR)
       right[nr++] = (Hint){ kBtn_Y, "Riordina" };
+    // in 4:3 non c'e' spazio ai lati: niente suggerimenti (sotto coprirebbero
+    // i riquadri dell'inventario)
     int side = (cv->width - 256) / 2;
     if (side >= 60) {
       DrawHintColumn(cv, left, 2, side / 2);
       if (nr)
         DrawHintColumn(cv, right, nr, cv->width - side / 2);
-    } else {
-      Hint all[4] = { left[0], left[1] };
-      for (int i = 0; i < nr; i++)
-        all[2 + i] = right[i];
-      DrawHints(cv, all, 2 + nr, 22);
     }
   } else if (sub == 7 && overworld_map_state >= 4 && overworld_map_state <= 5) {  // mappa del mondo
     if (overworld_map_flags & 1) {

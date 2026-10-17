@@ -410,7 +410,7 @@ void HdHud_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
       }
     if (link_magic_consumption >= 1) {
       const char *t = link_magic_consumption >= 2 ? "1/4" : "1/2";
-      DrawSmallText(&cv, bx + (bw - SmallTextWidth(t)) / 2, by + 2, t, 0xc8c8c8);
+      DrawSmallText(&cv, bx + (bw - SmallTextWidth(t)) / 2, by + 2, t, 0xf8f8f8);
     }
   }
 

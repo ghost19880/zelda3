@@ -33,16 +33,43 @@ static bool FeatureOn(void) {
 // mondo resta visibile dietro e la vista libera resta ferma dov'era
 static bool InMenuOverWorld(void) {
   int sub = submodule_index;
+  // mappa (7) e Ocarina (10): nella fase 0 il mondo si scurisce ancora visibile
   return main_module_index == 14 && saved_module_for_menu == 9 &&
-         (sub == 1 || sub == 2 || sub == 4 || sub == 8 || sub == 9 || sub == 11);
+         (sub == 1 || sub == 2 || sub == 4 || sub == 8 || sub == 9 || sub == 11 ||
+          ((sub == 7 || sub == 10) && overworld_map_state == 0));
+}
+
+// Arrivo con l'Ocarina: dalla fase 7 l'area di arrivo e' caricata e compare
+// schiarendosi, poi l'uccello posa Link. La vista libera deve essere gia' al
+// suo posto, non spostarsi dopo
+static bool InFluteArrival(void) {
+  return main_module_index == 14 && submodule_index == 10 && overworld_map_state >= 7;
+}
+
+// Ritorno dalla mappa del mondo: il gioco ricarica le sovrapposizioni e
+// schiarisce lo schermo (sottomoduli 32-34) prima di ridare il controllo
+static bool InMapReturn(void) {
+  return main_module_index == 9 && submodule_index >= 32 && submodule_index <= 34;
 }
 
 bool HdWorld_Active(void) {
   if (!FeatureOn() || overworld_screen_index >= 0x80)
     return false;
-  if (main_module_index != 9 && !InMenuOverWorld())
+  if (main_module_index != 9 && !InMenuOverWorld() && !InFluteArrival())
     return false;
   return g_zenv.ppu->mode != 7;
+}
+
+// Luminosita' dello schermo (registro INIDISP, 0-15): il gioco la usa per le
+// dissolvenze, per esempio all'arrivo con l'Ocarina. La PPU la applica ai
+// suoi pixel; a quelli presi dalle immagini delle aree si applica qui.
+static int g_bright = 15;
+
+static inline uint32 Dim(uint32 c) {
+  if (g_bright >= 15)
+    return c;
+  uint32 r = (c >> 16 & 255) * g_bright / 15, g = (c >> 8 & 255) * g_bright / 15, b = (c & 255) * g_bright / 15;
+  return (c & 0xff000000) | r << 16 | g << 8 | b;
 }
 
 static bool InTransition(void) {
@@ -406,7 +433,7 @@ static void DrawFrozenEnemies(uint8 *pixels, int pitch, int width, int height, i
             continue;  // HUD e sprite veri restano davanti
           if (HdWorld_InsideCurrentArea(cam_x + sx, cam_y + sy) && !InTransition())
             continue;
-          row[sx] = c;
+          row[sx] = Dim(c);
         }
       }
     }
@@ -442,6 +469,13 @@ void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
     HdWorld_ResetStates();
   else if (main_module_index == 9 && submodule_index == 0 && PersistOn())
     SnapshotArea();
+  // Mappa del mondo aperta: la vista si conserva per il ritorno, cosi' alla
+  // chiusura l'inquadratura e' la stessa di prima
+  if (main_module_index == 14 && submodule_index == 7 && saved_module_for_menu == 9 && g_vis_valid) {
+    *cam_x = gx + g_world_dx;
+    *cam_y = gy + g_world_dy;
+    return;
+  }
   if (HdWorld_Active() && InMenuOverWorld() && g_vis_valid) {
     // menu o dialogo aperto: la vista non si muove (e alla chiusura riprende
     // a seguire Link da dove era)
@@ -449,7 +483,8 @@ void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
     *cam_y = gy + g_world_dy;
     return;
   }
-  int mode = !HdWorld_Active() || main_module_index != 9 ? 0 : submodule_index == 0 ? 1 : InTransition() ? 2 :
+  int mode = !HdWorld_Active() ? 0 : InFluteArrival() ? 1 : main_module_index != 9 ? 0 :
+             submodule_index == 0 || InMapReturn() ? 1 : InTransition() ? 2 :
              InMosaicTransition() ? 3 : 0;
   int prev_mode = g_prev_mode;
   g_prev_mode = mode;
@@ -837,7 +872,7 @@ static void DrawAnimatedCells(uint8 *pixels, int pitch, int width, int height, i
           int bit = hf ? col : 7 - col;
           int v = (p01 >> bit & 1) | (p01 >> (8 + bit) & 1) << 1 |
                   (p23 >> bit & 1) << 2 | (p23 >> (8 + bit) & 1) << 3;
-          dst[sx] = OverlayBlend(ov, ac->color[v], sx, sy);
+          dst[sx] = OverlayBlend(ov, Dim(ac->color[v]), sx, sy);
         }
       }
     }
@@ -856,7 +891,7 @@ static bool IsMountainArea(int head) {
 // cosi' si capisce che in mezzo c'e' un dislivello (vale nei due versi)
 static void DrawHeightFog(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y) {
   enum { kFogDist = 128, kFogInside = 5 };  // lunghezza della sfumatura, in pixel
-  const uint32 kFog = 0xc4ccd4;
+  const uint32 kFog = Dim(0xc4ccd4);
   const float kFogStart = 0.6f;  // velatura sul confine
   bool cur_high = IsMountainArea(overworld_screen_index);
   int ax, ay, as;
@@ -948,6 +983,7 @@ void HdWorld_Composite(uint8 *pixels, int pitch, int width, int height) {
   if (!HdWorld_Active())
     return;
   Ppu *ppu = g_zenv.ppu;
+  g_bright = ppu->forcedBlank ? 0 : ppu->brightness;
   bool mosaic = InMosaicTransition();
   bool all = InTransition() || mosaic;
   // aspetto dei nemici, anche quando la vista coincide con quella del gioco
@@ -1000,7 +1036,7 @@ void HdWorld_Composite(uint8 *pixels, int pitch, int width, int height) {
           edge_head = eh, edge_side = side;
           edge_color = ei ? ei->edge[side] : 5u << 24;
         }
-        row[x] = OverlayBlend(&ov, edge_color, x, y);
+        row[x] = OverlayBlend(&ov, Dim(edge_color), x, y);
         continue;
       }
       if (head != last_head) {
@@ -1009,14 +1045,14 @@ void HdWorld_Composite(uint8 *pixels, int pitch, int width, int height) {
       }
       if (!img) {
         if (!inside)
-          row[x] = OverlayBlend(&ov, outside, x, y);
+          row[x] = OverlayBlend(&ov, Dim(outside), x, y);
         continue;
       }
       int ix = wx - img->x, iy = wy - img->y;
       if (iy >= img->size - kHiddenRows)
         iy = img->size - kHiddenRows - 1;
       if ((unsigned)ix < (unsigned)img->size && (unsigned)iy < (unsigned)img->size) {
-        row[x] = OverlayBlend(&ov, img->pix[iy * img->size + ix], x, y);
+        row[x] = OverlayBlend(&ov, Dim(img->pix[iy * img->size + ix]), x, y);
       }
     }
   }
