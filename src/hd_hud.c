@@ -404,9 +404,22 @@ void HdHud_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   const int x0 = 8, y0 = 8;
   int hearts = link_health_capacity >> 3;
   int hp = (link_health_current + 3) & ~3;
+  // Cuori che si riempiono (fata, pozione, cuore preso): come nell'HUD
+  // originale (Hud_AnimateHeartRefill), il cuore appena aggiunto lampeggia
+  // con i tile 0x24A3, 0x24A4, 0x24A3 prima di restare pieno; fino al primo
+  // lampo mostra ancora com'era prima
+  int anim_heart = is_doing_heart_animation ? ((link_health_current & ~7) - 1) >> 3 : -1;
   for (int i = 0; i < hearts; i++) {
     int left = hp - i * 8;
     uint16 t = left >= 8 ? 0x24A0 : left >= 4 ? 0x24A1 : 0x24A2;
+    if (i == anim_heart) {
+      static const uint16 kAnimHeartPartial[4] = { 0x24A3, 0x24A4, 0x24A3, 0x24A0 };
+      int sub = animate_heart_refill_countdown_subpos;
+      if (sub)
+        t = kAnimHeartPartial[sub - 1];
+      else
+        t = left - 8 >= 8 ? 0x24A0 : left - 8 >= 4 ? 0x24A1 : 0x24A2;
+    }
     DrawTile(&cv, x0 + (i % 10) * 8, y0 + (i / 10) * 8, t);
   }
   int rows = hearts > 10 ? 2 : 1;

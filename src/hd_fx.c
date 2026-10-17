@@ -474,6 +474,13 @@ static bool IsWaterAttr(uint8 a) {
   return a == 0x08 || a == 0x09;
 }
 
+// Aree in cui lo sfondo e' il cielo con il panorama sotto le nuvole: la
+// Montagna della Morte (chiara e oscura) e la Piramide
+static bool IsBackdropScene(void) {
+  int a = BYTE(overworld_screen_index), sc = a & 0x3f;
+  return a < 0x80 && (sc == 0x03 || sc == 0x05 || sc == 0x07 || a == 0x5b);
+}
+
 int HdFx_SceneModule(void) {
   int m = main_module_index, sub = submodule_index;
   if (m == 14) {
@@ -509,6 +516,10 @@ void HdFx_MarkWater(uint8 *pixels, int pitch, int width, int height, int bias_x,
   int mod = HdFx_SceneModule();
   if (mod != 7 && mod != 9)
     return;
+  // sulla Montagna della Morte e alla Piramide il vuoto oltre i dirupi e'
+  // "acqua profonda" per il gioco, ma sullo schermo e' il cielo: lo sfondo
+  // resta sfondo (HdFx_MarkBackdrop), invece di diventare acqua a blocchi
+  bool sky = mod == 9 && IsBackdropScene();
   int ext = (width - 256) / 2;
   for (int layer = 0; layer < 2; layer++) {
     // all'aperto conta solo il terreno (BG2); nei labirinti anche il piano di sopra (BG1)
@@ -538,7 +549,7 @@ void HdFx_MarkWater(uint8 *pixels, int pitch, int width, int height, int bias_x,
               continue;
             uint32 l = row[x] >> 24;
             // solo il fondale del layer giusto: HUD (2) e personaggi (4, 6) restano
-            if (l == (uint32)(layer ? 1 : 0) || (layer && l == 5))
+            if (l == (uint32)(layer ? 1 : 0) || (layer && l == 5 && !sky))
               row[x] = (row[x] & 0x00ffffff) | (uint32)kLayerWater << 24;
           }
         }
@@ -933,11 +944,7 @@ void HdFx_SpriteShadows(uint8 *pixels, int pitch, int width, int height) {
 // si marca come 3 (layer non usato all'aperto) solo in queste aree.
 void HdFx_MarkBackdrop(uint8 *pixels, int pitch, int width, int height) {
   int mod;
-  if (!InGameplay(&mod) || mod != 9)
-    return;
-  int a = BYTE(overworld_screen_index);
-  int sc = a & 0x3f;
-  if (a >= 0x80 || !(sc == 0x03 || sc == 0x05 || sc == 0x07 || a == 0x5b))
+  if (!InGameplay(&mod) || mod != 9 || !IsBackdropScene())
     return;
   for (int y = 0; y < height; y++) {
     uint32 *row = (uint32 *)(pixels + y * pitch);

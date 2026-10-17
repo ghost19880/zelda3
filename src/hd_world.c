@@ -634,7 +634,7 @@ static void DrawLoadedArea(AreaImage *img) {
           if (img->n_anim < img->cap_anim) {
             AnimCell *ac = &img->anim[img->n_anim++];
             ac->x = ox, ac->y = oy, ac->entry = e;
-            ac->color[0] = water ? (backdrop & 0xffffff) | 7u << 24 : backdrop;
+            ac->color[0] = water && !backdrop_scene ? (backdrop & 0xffffff) | 7u << 24 : backdrop;
             for (int v = 1; v < 16; v++)
               ac->color[v] = Bgr15ToPixel(main_palette_buffer[pal * 16 + v], water ? 7 : 1);
           }
@@ -647,8 +647,10 @@ static void DrawLoadedArea(AreaImage *img) {
             int bit = hf ? col : 7 - col;
             int v = (p01 >> bit & 1) | (p01 >> (8 + bit) & 1) << 1 |
                     (p23 >> bit & 1) << 2 | (p23 >> (8 + bit) & 1) << 3;
+            // sulla montagna lo sfondo e' il cielo anche nelle caselle che per
+            // il gioco sono acqua profonda (il vuoto oltre i dirupi)
             dst[col] = v ? Bgr15ToPixel(main_palette_buffer[pal * 16 + v], water ? 7 : 1) :
-                       water ? (backdrop & 0xffffff) | 7u << 24 : backdrop;
+                       water && !backdrop_scene ? (backdrop & 0xffffff) | 7u << 24 : backdrop;
           }
         }
       }
@@ -786,22 +788,34 @@ static void PrefetchNeighbors(void) {
 // memoria video, su tutto quello che si disegna al posto della PPU (immagini,
 // caselle animate, nemici fermi), cosi' il tempo atmosferico continua oltre
 // il bordo dell'area.
+//
+// Sulla Montagna della Morte e alla Piramide lo stesso schermo secondario
+// porta invece il panorama sotto le nuvole, che scorre piu' lento del
+// terreno: il gioco lo somma solo allo sfondo (dove il terreno e'
+// trasparente). Le immagini delle aree hanno li' il colore di fondo, a cui
+// si somma qui il panorama dal vivo: continua oltre il bordo dell'area e
+// non cambia quando si passa da un'area all'altra.
 typedef struct OverlayCtx {
-  bool on;
+  bool on;     // strato sommato a meta' a tutto (nebbia, pioggia, nuvole)
+  bool sky;    // strato sommato solo allo sfondo (panorama della montagna)
+  bool half;   // somma dimezzata
   int x0, y0;  // posizione nello strato del pixel 0,0 dello schermo
 } OverlayCtx;
 
 static void OverlayBegin(OverlayCtx *o, int ext) {
   Ppu *ppu = g_zenv.ppu;
-  o->on = (ppu->screenEnabled[1] & 1) && !(ppu->screenEnabled[0] & 1) && (ppu->mathEnabled & 2) &&
-          ppu->addSubscreen && !ppu->subtractColor && ppu->halfColor && ppu->mode != 7;
+  bool sub = (ppu->screenEnabled[1] & 1) && !(ppu->screenEnabled[0] & 1) && ppu->addSubscreen &&
+             !ppu->subtractColor && ppu->mode != 7;
+  o->on = sub && (ppu->mathEnabled & 2) && ppu->halfColor;
+  o->sky = sub && !o->on && (ppu->mathEnabled & 0x20);
+  o->half = ppu->halfColor;
   o->x0 = ppu->bgLayer[0].hScroll + ppu->bgBiasX - ext;
   o->y0 = ppu->bgLayer[0].vScroll + ppu->bgBiasY + 1;
 }
 
-static inline uint32 OverlayBlend(const OverlayCtx *o, uint32 c, int sx, int sy) {
-  if (!o->on)
-    return c;
+// Colore (BGR a 15 bit) dello strato BG1 nel pixel sx, sy dello schermo; -1
+// dove e' trasparente
+static int OverlayColor(const OverlayCtx *o, int sx, int sy) {
   Ppu *ppu = g_zenv.ppu;
   const BgLayer *bg = &ppu->bgLayer[0];
   int px = (o->x0 + sx) & 0x3ff, py = (o->y0 + sy) & 0x3ff;
@@ -815,9 +829,36 @@ static inline uint32 OverlayBlend(const OverlayCtx *o, uint32 c, int sx, int sy)
   const uint16 *t = &ppu->vram[(bg->tileAdr + (e & 0x3ff) * 16) & 0x7fff];
   uint16 p01 = t[row], p23 = t[row + 8];
   int v = (p01 >> bit & 1) | (p01 >> (8 + bit) & 1) << 1 | (p23 >> bit & 1) << 2 | (p23 >> (8 + bit) & 1) << 3;
-  if (!v)
+  return v ? ppu->cgram[(e >> 10 & 7) * 16 + v] : -1;
+}
+
+static inline uint32 OverlayBlend(const OverlayCtx *o, uint32 c, int sx, int sy) {
+  if (o->sky) {
+    uint32 l = c >> 24;
+    if (l != 3 && l != 5)
+      return c;  // solo lo sfondo
+    // come la PPU: colore di fondo attuale piu' lo strato (somma dimezzata
+    // se richiesto), o piu' il colore fisso dove lo strato e' trasparente.
+    // Colori a 5 bit, R nei bit bassi.
+    Ppu *ppu = g_zenv.ppu;
+    int col = OverlayColor(o, sx, sy);
+    bool half = o->half && col >= 0;
+    if (col < 0)
+      col = ppu->fixedColorR | ppu->fixedColorG << 5 | ppu->fixedColorB << 10;
+    int base = ppu->cgram[0], ch[3];
+    for (int k = 0; k < 3; k++) {
+      int v = (base >> (5 * k) & 31) + (col >> (5 * k) & 31);
+      if (half) v >>= 1;
+      if (v > 31) v = 31;
+      ch[k] = v << 3 | v >> 2;
+    }
+    return Dim((c & 0xff000000) | ch[0] << 16 | ch[1] << 8 | ch[2]);
+  }
+  if (!o->on)
+    return c;
+  int col = OverlayColor(o, sx, sy);
+  if (col < 0)
     return c;  // trasparente: il terreno resta com'e'
-  uint16 col = ppu->cgram[(e >> 10 & 7) * 16 + v];
   int r = col & 31, g = col >> 5 & 31, b = col >> 10 & 31;
   r = r << 3 | r >> 2, g = g << 3 | g >> 2, b = b << 3 | b >> 2;
   return (c & 0xff000000) | (((c >> 16 & 255) + r) >> 1) << 16 | (((c >> 8 & 255) + g) >> 1) << 8 | ((c & 255) + b) >> 1;
@@ -896,14 +937,19 @@ static void DrawHeightFog(uint8 *pixels, int pitch, int width, int height, int c
   bool cur_high = IsMountainArea(overworld_screen_index);
   int ax, ay, as;
   AreaRect(overworld_screen_index, &ax, &ay, &as);
-  // lati dell'area corrente che confinano con l'altro livello (su, giu',
-  // sinistra, destra): la nebbia comincia gia' 5 pixel dentro l'area
-  bool side[4];
-  for (int k = 0; k < 4; k++) {
-    int px = k == 2 ? ax - 1 : k == 3 ? ax + as : ax + as / 2;
-    int py = k == 0 ? ay - 1 : k == 1 ? ay + as : ay + as / 2;
-    int h = HeadAt(px, py);
-    side[k] = h >= 0 && IsMountainArea(h) != cur_high;
+  // Dentro l'area la nebbia comincia gia' 5 pixel prima dei lati che
+  // confinano con l'altro livello. Il vicino si guarda proprio di fronte al
+  // pixel: lungo il lato di un'area grande ci possono essere aree di tutti e
+  // due i livelli. Sopra e sotto: una colonna per volta (in blocchi da 8).
+  enum { kMaxFogCols = 1024 / 8 + 2 };
+  bool col_up[kMaxFogCols], col_down[kMaxFogCols];
+  int ncols = (width + 7) / 8 + 1;
+  if (ncols > kMaxFogCols) ncols = kMaxFogCols;
+  for (int i = 0; i < ncols; i++) {
+    int wx = ((cam_x >> 3) + i) << 3;
+    int hu = HeadAt(wx, ay - 1), hd = HeadAt(wx, ay + as);
+    col_up[i] = hu >= 0 && IsMountainArea(hu) != cur_high;
+    col_down[i] = hd >= 0 && IsMountainArea(hd) != cur_high;
   }
   for (int y = 0; y < height; y++) {
     uint32 *row = (uint32 *)(pixels + y * pitch);
@@ -911,6 +957,9 @@ static void DrawHeightFog(uint8 *pixels, int pitch, int width, int height, int c
     int dy = wy < ay ? ay - wy : wy >= ay + as ? wy - (ay + as - 1) : 0;
     int last_head = -2;
     bool other = false;
+    int hl = HeadAt(ax - 1, wy), hr = HeadAt(ax + as, wy);
+    bool side_left = hl >= 0 && IsMountainArea(hl) != cur_high;
+    bool side_right = hr >= 0 && IsMountainArea(hr) != cur_high;
     for (int x = 0; x < width; x++) {
       int wx = cam_x + x;
       int dx = wx < ax ? ax - wx : wx >= ax + as ? wx - (ax + as - 1) : 0;
@@ -920,11 +969,13 @@ static void DrawHeightFog(uint8 *pixels, int pitch, int width, int height, int c
         // dentro l'area corrente, vicino a un lato che da' sull'altro livello
         if (l == 2 || l == 4 || l == 6)
           continue;  // HUD e sprite restano nitidi
-        int k = kFogInside;
-        if (side[0] && wy - ay < k) k = wy - ay;
-        if (side[1] && ay + as - 1 - wy < k) k = ay + as - 1 - wy;
-        if (side[2] && wx - ax < k) k = wx - ax;
-        if (side[3] && ax + as - 1 - wx < k) k = ax + as - 1 - wx;
+        int k = kFogInside, ci = (wx >> 3) - (cam_x >> 3);
+        if (ci < 0) ci = 0;
+        if (ci >= ncols) ci = ncols - 1;
+        if (col_up[ci] && wy - ay < k) k = wy - ay;
+        if (col_down[ci] && ay + as - 1 - wy < k) k = ay + as - 1 - wy;
+        if (side_left && wx - ax < k) k = wx - ax;
+        if (side_right && ax + as - 1 - wx < k) k = ax + as - 1 - wx;
         if (k >= kFogInside)
           continue;
         f = kFogStart * (kFogInside - k) / (kFogInside + 1);
