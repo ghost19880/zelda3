@@ -15,6 +15,9 @@ void HdFx_BeforeLight(uint8 *pixels, int pitch, int width, int height, int bias_
 // Dopo l'illuminazione: particelle, raggi e bagliori, pioggia e lampi
 void HdFx_AfterLight(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y);
 
+// Modulo della scena che si vede sullo schermo (per lo shader e per gli
+// effetti sul fondale): 7 = dentro, 9 = fuori, 14 = un menu che copre il gioco
+int HdFx_SceneModule(void);
 // Marca i pixel d'acqua (layer 7) per lo shader
 void HdFx_MarkWater(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y);
 // All'aperto con il sole (per le ombre delle nuvole dello shader)

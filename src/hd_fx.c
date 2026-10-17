@@ -474,9 +474,33 @@ static bool IsWaterAttr(uint8 a) {
   return a == 0x08 || a == 0x09;
 }
 
+int HdFx_SceneModule(void) {
+  int m = main_module_index, sub = submodule_index;
+  if (m == 14) {
+    // inventario (1), dialoghi (2) e menu salva/esci (11) si aprono sopra il
+    // gioco, che resta sotto
+    if (sub == 1 || sub == 2 || sub == 11)
+      return saved_module_for_menu;
+    // Ocarina: prima (0) il mondo si scurisce, dalla fase 7 l'area di arrivo
+    // e' gia' caricata e compare, poi scende l'uccello. In mezzo c'e' la mappa
+    if (sub == 10 && (overworld_map_state == 0 || overworld_map_state >= 7))
+      return 9;
+    return 14;
+  }
+  // cerchio che si chiude (15) o si riapre (16): la scena dentro o fuori
+  if (m == 15 || m == 16)
+    return player_is_indoors ? 7 : 9;
+  // transizione dello specchio (ondeggiamento e caricamento dell'altro mondo)
+  if (m == 9 && (sub == 35 || sub == 44))
+    return 14;
+  return m;
+}
+
 void HdFx_MarkWater(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y) {
-  int mod;
-  if (!InGameplay(&mod))
+  // anche durante il cerchio di transizione e l'arrivo con l'Ocarina:
+  // altrimenti lo shader dipingerebbe l'acqua per qualche fotogramma
+  int mod = HdFx_SceneModule();
+  if (mod != 7 && mod != 9)
     return;
   int ext = (width - 256) / 2;
   for (int layer = 0; layer < 2; layer++) {
