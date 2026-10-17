@@ -29,8 +29,18 @@ static bool FeatureOn(void) {
   return (enhanced_features0 & kFeatures0_ContinuousWorld) != 0;
 }
 
+// Dialoghi, inventario, pozioni e menu di salvataggio aperti all'aperto: il
+// mondo resta visibile dietro e la vista libera resta ferma dov'era
+static bool InMenuOverWorld(void) {
+  int sub = submodule_index;
+  return main_module_index == 14 && saved_module_for_menu == 9 &&
+         (sub == 1 || sub == 2 || sub == 4 || sub == 8 || sub == 9 || sub == 11);
+}
+
 bool HdWorld_Active(void) {
-  if (!FeatureOn() || main_module_index != 9 || overworld_screen_index >= 0x80)
+  if (!FeatureOn() || overworld_screen_index >= 0x80)
+    return false;
+  if (main_module_index != 9 && !InMenuOverWorld())
     return false;
   return g_zenv.ppu->mode != 7;
 }
@@ -432,7 +442,14 @@ void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
     HdWorld_ResetStates();
   else if (main_module_index == 9 && submodule_index == 0 && PersistOn())
     SnapshotArea();
-  int mode = !HdWorld_Active() ? 0 : submodule_index == 0 ? 1 : InTransition() ? 2 :
+  if (HdWorld_Active() && InMenuOverWorld() && g_vis_valid) {
+    // menu o dialogo aperto: la vista non si muove (e alla chiusura riprende
+    // a seguire Link da dove era)
+    *cam_x = gx + g_world_dx;
+    *cam_y = gy + g_world_dy;
+    return;
+  }
+  int mode = !HdWorld_Active() || main_module_index != 9 ? 0 : submodule_index == 0 ? 1 : InTransition() ? 2 :
              InMosaicTransition() ? 3 : 0;
   int prev_mode = g_prev_mode;
   g_prev_mode = mode;
