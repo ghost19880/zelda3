@@ -7,6 +7,8 @@
 
 extern bool g_fx_embers, g_fx_window_rays, g_fx_item_glow, g_fx_heat_haze, g_fx_rain;
 extern bool g_fx_menu_blur, g_fx_sprite_shadows, g_fx_soft_iris, g_fx_button_hints;
+// Frame di gioco dall'avvio (per le animazioni: frame_counter si azzera ogni 256)
+extern uint32 g_fx_frames;
 
 // Prima dell'illuminazione: riconosce la lava e fa tremolare l'aria sopra
 void HdFx_BeforeLight(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y);

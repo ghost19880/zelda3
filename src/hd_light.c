@@ -186,7 +186,7 @@ static void CollectLights(int mod, bool dark, int frame_w, int bias_x, int bias_
   g_hd_num_fire = 0;
   int ext = (frame_w - 256) / 2;
   int cam_x = BG2HOFS_copy2 + bias_x, cam_y = BG2VOFS_copy2 + bias_y;
-  float t = frame_counter * 0.21f;
+  float t = g_fx_frames * 0.21f;
 
   if (mod == 7) {
     // Torce accese della stanza
@@ -380,7 +380,7 @@ void HdLight_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
   {
     int ext = (width - 256) / 2;
     int cam_x = BG2HOFS_copy2 + bias_x, cam_y = BG2VOFS_copy2 + bias_y;
-    float t = frame_counter * 0.21f;
+    float t = g_fx_frames * 0.21f;
     CollectSpriteLights(dark, ext, cam_x, cam_y, t);
     if (mod == 7)
       CollectLavaLights(pixels, pitch, width, height, dark, ext, cam_x, cam_y, t);
@@ -394,9 +394,11 @@ void HdLight_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
 
   int n = width * height;
   if (n * 3 > g_factor_cap) {
-    g_factor_cap = n * 3;
     free(g_factor);
-    g_factor = malloc(sizeof(float) * g_factor_cap);
+    g_factor = malloc(sizeof(float) * n * 3);
+    g_factor_cap = g_factor ? n * 3 : 0;
+    if (!g_factor)
+      return;
   }
   for (int i = 0; i < n * 3; i++)
     g_factor[i] = g_ambient;

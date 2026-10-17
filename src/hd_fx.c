@@ -39,9 +39,11 @@ static inline bool IsSprite(uint32 c) {
   return l == 4 || l == 6;
 }
 
-// Somma un colore al pixel (luce additiva)
+// Somma un colore al pixel (luce additiva); l'HUD resta intatto
 static inline void AddColor(uint32 *p, float r, float g, float b, float a) {
   uint32 c = *p;
+  if (IsHud(c))
+    return;
   int cr = ClampByte(((c >> 16) & 0xff) + (int)(r * a));
   int cg = ClampByte(((c >> 8) & 0xff) + (int)(g * a));
   int cb = ClampByte((c & 0xff) + (int)(b * a));
@@ -51,7 +53,7 @@ static inline void AddColor(uint32 *p, float r, float g, float b, float a) {
 // Segna il pixel come "sprite": lo shader four sword non lo dipinge (lo
 // cancellerebbe, essendo largo un solo pixel) ma gli applica il colore
 static inline void MarkSharp(uint32 *p) {
-  if (!IsSprite(*p))
+  if (!IsSprite(*p) && !IsHud(*p))
     *p = (*p & 0x00ffffff) | 4u << 24;
 }
 
@@ -136,7 +138,7 @@ static void ClassifyCells(const uint8 *pixels, int pitch, int width, int height,
 // 7. Calore sopra la lava: l'aria tremola appena, con un'onda ancorata al mondo
 // (non scivola quando la telecamera si sposta) e spostamenti sotto il pixel
 
-static uint32 g_fx_frames;  // contatore dei frame di gioco che non si azzera
+uint32 g_fx_frames;  // contatore dei frame di gioco che non si azzera (frame_counter e' a 8 bit)
 
 static inline uint32 MixColor(uint32 a, uint32 b, float k) {
   int ra = (a >> 16) & 0xff, ga = (a >> 8) & 0xff, ba = a & 0xff;
@@ -349,7 +351,7 @@ static void ApplyWindowRays(uint8 *pixels, int pitch, int width, int height, int
     ScanWindows();
     g_shaft_timer = 30;
   }
-  float t = frame_counter * 0.02f;
+  float t = g_fx_frames * 0.02f;
   for (int i = 0; i < g_num_shafts; i++) {
     WindowShaft *sh = &g_shafts[i];
     // posizione sullo schermo con lo scorrimento del layer su cui sta la luce
@@ -417,7 +419,7 @@ static void ApplyItemGlow(uint8 *pixels, int pitch, int width, int height, int c
     float cy = (ancilla_y_hi[k] << 8 | ancilla_y_lo[k]) + 9 - lift - cam_y;
     float big = (type == 0x22) ? 1.0f : 1.5f;
     float radius = 52 * big;
-    float rot = frame_counter * 0.03f;
+    float rot = g_fx_frames * 0.03f;
     int x0 = IntMax((int)(cx - radius), 0), x1 = IntMin((int)(cx + radius), width - 1);
     int y0 = IntMax((int)(cy - radius), 0), y1 = IntMin((int)(cy + radius), height - 1);
     for (int y = y0; y <= y1; y++) {
@@ -690,9 +692,11 @@ void HdFx_MenuBlur(uint8 *pixels, int pitch, int width, int height) {
   int n = width * height;
   if (n > g_blur_cap) {
     free(g_blur_buf), free(g_blur_tmp);
-    g_blur_cap = n;
     g_blur_buf = malloc(n * 16);
     g_blur_tmp = malloc(n * 16);
+    g_blur_cap = g_blur_buf && g_blur_tmp ? n : 0;
+    if (!g_blur_cap)
+      return;
   }
   for (int y = 0; y < height; y++) {
     const uint32 *row = (const uint32 *)(pixels + y * pitch);
@@ -834,9 +838,11 @@ void HdFx_SpriteShadows(uint8 *pixels, int pitch, int width, int height) {
   int n = width * height;
   if (n > g_shadow_cap) {
     free(g_shadow), free(g_shadow_tmp);
-    g_shadow_cap = n;
     g_shadow = malloc(n * sizeof(float));
     g_shadow_tmp = malloc(n * sizeof(float));
+    g_shadow_cap = g_shadow && g_shadow_tmp ? n : 0;
+    if (!g_shadow_cap)
+      return;
   }
   memset(g_shadow, 0, n * sizeof(float));
   bool any = false;
