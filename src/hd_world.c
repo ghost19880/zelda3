@@ -729,10 +729,56 @@ static void PrefetchNeighbors(void) {
     }
 }
 
+// Strato sovrapposto dell'area corrente (nebbia del Bosco Perduto, pioggia e
+// buio del temporale, nuvole): il gioco lo mette sullo schermo secondario
+// (BG1) e lo somma a meta' al terreno e agli sprite. Sullo schermo copre
+// tutto, ma dove il terreno viene dalle immagini delle aree il disegno della
+// PPU viene sostituito: lo si somma qui allo stesso modo, leggendolo dalla
+// memoria video, su tutto quello che si disegna al posto della PPU (immagini,
+// caselle animate, nemici fermi), cosi' il tempo atmosferico continua oltre
+// il bordo dell'area.
+typedef struct OverlayCtx {
+  bool on;
+  int x0, y0;  // posizione nello strato del pixel 0,0 dello schermo
+} OverlayCtx;
+
+static void OverlayBegin(OverlayCtx *o, int ext) {
+  Ppu *ppu = g_zenv.ppu;
+  o->on = (ppu->screenEnabled[1] & 1) && !(ppu->screenEnabled[0] & 1) && (ppu->mathEnabled & 2) &&
+          ppu->addSubscreen && !ppu->subtractColor && ppu->halfColor && ppu->mode != 7;
+  o->x0 = ppu->bgLayer[0].hScroll + ppu->bgBiasX - ext;
+  o->y0 = ppu->bgLayer[0].vScroll + ppu->bgBiasY + 1;
+}
+
+static inline uint32 OverlayBlend(const OverlayCtx *o, uint32 c, int sx, int sy) {
+  if (!o->on)
+    return c;
+  Ppu *ppu = g_zenv.ppu;
+  const BgLayer *bg = &ppu->bgLayer[0];
+  int px = (o->x0 + sx) & 0x3ff, py = (o->y0 + sy) & 0x3ff;
+  int tx = px >> 3 & 63, ty = py >> 3 & 63;
+  uint16 adr = bg->tilemapAdr + ((ty & 31) << 5 | (tx & 31));
+  if ((tx & 32) && bg->tilemapWider) adr += 0x400;
+  if ((ty & 32) && bg->tilemapHigher) adr += bg->tilemapWider ? 0x800 : 0x400;
+  uint16 e = ppu->vram[adr & 0x7fff];
+  int row = (e & 0x8000) ? 7 - (py & 7) : (py & 7);
+  int bit = (e & 0x4000) ? (px & 7) : 7 - (px & 7);
+  const uint16 *t = &ppu->vram[(bg->tileAdr + (e & 0x3ff) * 16) & 0x7fff];
+  uint16 p01 = t[row], p23 = t[row + 8];
+  int v = (p01 >> bit & 1) | (p01 >> (8 + bit) & 1) << 1 | (p23 >> bit & 1) << 2 | (p23 >> (8 + bit) & 1) << 3;
+  if (!v)
+    return c;  // trasparente: il terreno resta com'e'
+  uint16 col = ppu->cgram[(e >> 10 & 7) * 16 + v];
+  int r = col & 31, g = col >> 5 & 31, b = col >> 10 & 31;
+  r = r << 3 | r >> 2, g = g << 3 | g >> 2, b = b << 3 | b >> 2;
+  return (c & 0xff000000) | (((c >> 16 & 255) + r) >> 1) << 16 | (((c >> 8 & 255) + g) >> 1) << 8 | ((c & 255) + b) >> 1;
+}
+
 // Ridisegna le caselle animate delle immagini visibili con il fotogramma
 // d'animazione attuale (stessa memoria video per tutte le aree dello stesso
 // mondo), dove il fondale viene dalle immagini
-static void DrawAnimatedCells(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, bool all) {
+static void DrawAnimatedCells(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, bool all,
+                              const OverlayCtx *ov) {
   Ppu *ppu = g_zenv.ppu;
   uint16 chr_base = ppu->bgLayer[1].tileAdr;
   for (int i = 0; i < kMaxImages; i++) {
@@ -774,7 +820,7 @@ static void DrawAnimatedCells(uint8 *pixels, int pitch, int width, int height, i
           int bit = hf ? col : 7 - col;
           int v = (p01 >> bit & 1) | (p01 >> (8 + bit) & 1) << 1 |
                   (p23 >> bit & 1) << 2 | (p23 >> (8 + bit) & 1) << 3;
-          dst[sx] = ac->color[v];
+          dst[sx] = OverlayBlend(ov, ac->color[v], sx, sy);
         }
       }
     }
@@ -849,46 +895,6 @@ static void DrawHeightFog(uint8 *pixels, int pitch, int width, int height, int c
       row[x] = 3u << 24 | r << 16 | g << 8 | b;
     }
   }
-}
-
-// Strato sovrapposto dell'area corrente (nebbia del Bosco Perduto, pioggia,
-// nuvole): il gioco lo mette sullo schermo secondario (BG1) e lo somma a meta'
-// al terreno. Sullo schermo copre tutto, ma dove il terreno viene dalle
-// immagini delle aree il disegno della PPU viene sostituito: lo si somma qui
-// allo stesso modo, leggendolo dalla memoria video.
-typedef struct OverlayCtx {
-  bool on;
-  int x0, y0;  // posizione nello strato del pixel 0,0 dello schermo
-} OverlayCtx;
-
-static void OverlayBegin(OverlayCtx *o, int ext) {
-  Ppu *ppu = g_zenv.ppu;
-  o->on = (ppu->screenEnabled[1] & 1) && !(ppu->screenEnabled[0] & 1) && (ppu->mathEnabled & 2) &&
-          ppu->addSubscreen && !ppu->subtractColor && ppu->halfColor && ppu->mode != 7;
-  o->x0 = ppu->bgLayer[0].hScroll + ppu->bgBiasX - ext;
-  o->y0 = ppu->bgLayer[0].vScroll + ppu->bgBiasY + 1;
-}
-
-static inline uint32 OverlayBlend(const OverlayCtx *o, uint32 c, int sx, int sy) {
-  Ppu *ppu = g_zenv.ppu;
-  const BgLayer *bg = &ppu->bgLayer[0];
-  int px = (o->x0 + sx) & 0x3ff, py = (o->y0 + sy) & 0x3ff;
-  int tx = px >> 3 & 63, ty = py >> 3 & 63;
-  uint16 adr = bg->tilemapAdr + ((ty & 31) << 5 | (tx & 31));
-  if ((tx & 32) && bg->tilemapWider) adr += 0x400;
-  if ((ty & 32) && bg->tilemapHigher) adr += bg->tilemapWider ? 0x800 : 0x400;
-  uint16 e = ppu->vram[adr & 0x7fff];
-  int row = (e & 0x8000) ? 7 - (py & 7) : (py & 7);
-  int bit = (e & 0x4000) ? (px & 7) : 7 - (px & 7);
-  const uint16 *t = &ppu->vram[(bg->tileAdr + (e & 0x3ff) * 16) & 0x7fff];
-  uint16 p01 = t[row], p23 = t[row + 8];
-  int v = (p01 >> bit & 1) | (p01 >> (8 + bit) & 1) << 1 | (p23 >> bit & 1) << 2 | (p23 >> (8 + bit) & 1) << 3;
-  if (!v)
-    return c;  // trasparente: il terreno resta com'e'
-  uint16 col = ppu->cgram[(e >> 10 & 7) * 16 + v];
-  int r = col & 31, g = col >> 5 & 31, b = col >> 10 & 31;
-  r = r << 3 | r >> 2, g = g << 3 | g >> 2, b = b << 3 | b >> 2;
-  return (c & 0xff000000) | (((c >> 16 & 255) + r) >> 1) << 16 | (((c >> 8 & 255) + g) >> 1) << 8 | ((c & 255) + b) >> 1;
 }
 
 // Il gioco scurisce lo schermo abbassando i colori delle palette (rispetto
@@ -976,7 +982,7 @@ void HdWorld_Composite(uint8 *pixels, int pitch, int width, int height) {
           edge_head = eh, edge_side = side;
           edge_color = ei ? ei->edge[side] : 5u << 24;
         }
-        row[x] = edge_color;
+        row[x] = OverlayBlend(&ov, edge_color, x, y);
         continue;
       }
       if (head != last_head) {
@@ -985,21 +991,19 @@ void HdWorld_Composite(uint8 *pixels, int pitch, int width, int height) {
       }
       if (!img) {
         if (!inside)
-          row[x] = outside;
+          row[x] = OverlayBlend(&ov, outside, x, y);
         continue;
       }
       int ix = wx - img->x, iy = wy - img->y;
       if (iy >= img->size - kHiddenRows)
         iy = img->size - kHiddenRows - 1;
       if ((unsigned)ix < (unsigned)img->size && (unsigned)iy < (unsigned)img->size) {
-        row[x] = img->pix[iy * img->size + ix];
-        if (ov.on)
-          row[x] = OverlayBlend(&ov, row[x], x, y);
+        row[x] = OverlayBlend(&ov, img->pix[iy * img->size + ix], x, y);
       }
     }
   }
   if (!mosaic) {
-    DrawAnimatedCells(pixels, pitch, width, height, cam_x, cam_y, all);
+    DrawAnimatedCells(pixels, pitch, width, height, cam_x, cam_y, all, &ov);
     if (PersistOn())
       DrawFrozenEnemies(pixels, pitch, width, height, cam_x, cam_y);
   }
