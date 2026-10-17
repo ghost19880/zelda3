@@ -357,13 +357,17 @@ void HdLight_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
     return;
   }
   bool dark = IsDarkRoom(mod);
+  // Le stanze buie da Lanterna (nel gioco si vede solo il cono di luce) sono
+  // completamente al buio; le altre (per esempio il passaggio segreto sotto
+  // il castello) restano solo in penombra
+  float dark_ambient = hdr_dungeon_dark_with_lantern ? 0.0f : kDarkAmbient;
   // Luce ambiente desiderata
   float target = 1.0f;
   if (dark) {
     int total, lit;
     CountTorches(&total, &lit);
     int needed = total < 3 ? total : 3;
-    target = (needed > 0 && lit >= needed) ? 1.0f : kDarkAmbient;
+    target = (needed > 0 && lit >= needed) ? 1.0f : dark_ambient;
   } else if (mod == 7) {
     target = 0.86f;  // labirinti: un po' piu' scuri
   }
@@ -397,7 +401,11 @@ void HdLight_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
   for (int i = 0; i < n * 3; i++)
     g_factor[i] = g_ambient;
   // A stanza illuminata le fiamme fanno solo un alone leggero
-  float light_scale = dark ? (1.0f - (g_ambient - kDarkAmbient) / (1.0f - kDarkAmbient) * 0.75f) : 1.0f;
+  float light_scale = 1.0f;
+  if (dark) {
+    float k = (g_ambient - dark_ambient) / (1.0f - dark_ambient);
+    light_scale = 1.0f - (k < 0 ? 0 : k > 1 ? 1 : k) * 0.75f;
+  }
   for (int li = 0; li < g_num_lights; li++) {
     Light *l = &g_lights[li];
     int x0 = (int)(l->x - l->radius), x1 = (int)(l->x + l->radius);
