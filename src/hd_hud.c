@@ -308,6 +308,33 @@ static void DrawSmallText(Canvas *cv, int x, int y, const char *s, uint32 color)
   }
 }
 
+// "1/2" della barra della magia: caratteri 4x6, alti quanto l'interno della
+// barra (il contorno scuro cade sul bordo esterno)
+enum { kMagicTextW = 3 * 4 + 2 };
+
+static void DrawMagicText(Canvas *cv, int x, int y) {
+  static const uint8 kGlyphs[3][6] = {
+    { 2, 6, 2, 2, 2, 7 },     // 1
+    { 1, 1, 2, 4, 8, 8 },     // /
+    { 6, 9, 1, 2, 4, 15 },    // 2
+  };
+  for (int pass = 0; pass < 2; pass++)
+    for (int i = 0; i < 3; i++)
+      for (int r = 0; r < 6; r++)
+        for (int c = 0; c < 4; c++) {
+          if (!(kGlyphs[i][r] >> (3 - c) & 1))
+            continue;
+          int px = x + i * 5 + c, py = y + r;
+          if (pass == 0) {
+            for (int dy = -1; dy <= 1; dy++)
+              for (int dx = -1; dx <= 1; dx++)
+                Px(cv, px + dx, py + dy, 0x101010);
+          } else {
+            Px(cv, px, py, 0xf8f8f8);
+          }
+        }
+}
+
 #include "hd_hud_buttons.h"
 
 // I tre tasti, disposti come li ha disegnati l'utente (pulsanti.png)
@@ -408,10 +435,9 @@ void HdHud_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
           col = 0x100c08;
         Px(&cv, bx + x, by + y, col);
       }
-    if (link_magic_consumption >= 1) {
-      const char *t = link_magic_consumption >= 2 ? "1/4" : "1/2";
-      DrawSmallText(&cv, bx + (bw - SmallTextWidth(t)) / 2, by + 2, t, 0xf8f8f8);
-    }
+    // come il gioco originale: "1/2" anche con il consumo a 1/4
+    if (link_magic_consumption >= 1)
+      DrawMagicText(&cv, bx + (bw - kMagicTextW) / 2, by + 1);
   }
 
   // --- Tasti: il punto piu' alto a filo con i cuori, il piu' a destra con

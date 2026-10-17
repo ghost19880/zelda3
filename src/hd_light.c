@@ -107,8 +107,9 @@ static const DecorShape kDecorShapes[] = {
   { 0, 0, 0, 0, 1, 0, 8, 8, 0x2dc2, 0x6dc2 },
 };
 
-// Confronto dei tile ignorando la palette (bit 10-12)
-#define TILE_KEY(t) ((t) & ~0x1c00)
+// Confronto dei tile ignorando palette (bit 10-12) e priorita' (bit 13): la
+// stessa torcia puo' essere disegnata sopra o sotto gli sprite
+#define TILE_KEY(t) ((t) & ~0x3c00)
 
 static void AddDecor(int x, int y) {
   for (int i = 0; i < g_num_decor; i++)
@@ -187,6 +188,9 @@ static void CollectLights(int mod, bool dark, int frame_w, int bias_x, int bias_
   int ext = (frame_w - 256) / 2;
   int cam_x = BG2HOFS_copy2 + bias_x, cam_y = BG2VOFS_copy2 + bias_y;
   float t = g_fx_frames * 0.21f;
+  // le fiamme di torce e bracieri cambiano fotogramma a meta' velocita'
+  // (misc.c): l'alone pulsa con lo stesso ritmo
+  float tf = t * 0.5f;
 
   if (mod == 7) {
     // Torce accese della stanza
@@ -203,7 +207,7 @@ static void CollectLights(int mod, bool dark, int frame_w, int bias_x, int bias_
       int w = (pos >> 1) & 0xfff;
       float x = ox + (w & 63) * 8 + 8 - cam_x + ext;
       float y = oy + ((w >> 6) & 63) * 8 + 8 - cam_y;
-      float flicker = 1.0f + 0.05f * sinf(t + i * 1.7f) + 0.03f * sinf(t * 2.3f + i);
+      float flicker = 1.0f + 0.05f * sinf(tf + i * 1.7f) + 0.03f * sinf(tf * 2.3f + i);
       if (dark)
         AddFireLight(x, y - 4, 96 * flicker, 1.25f, 1.05f, 0.80f, 1.0f);
       else
@@ -219,7 +223,7 @@ static void CollectLights(int mod, bool dark, int frame_w, int bias_x, int bias_
       DecorLight *d = &g_decor[i];
       float x = ox + d->x - cam_x + ext, y = oy + d->y - cam_y;
       float ph = d->phase * 0.1f;
-      float pulse = 0.82f + 0.12f * sinf(t * 1.6f + ph) + 0.06f * sinf(t * 4.1f + ph * 2.0f);
+      float pulse = 0.82f + 0.12f * sinf(tf * 1.6f + ph) + 0.06f * sinf(tf * 4.1f + ph * 2.0f);
       if (dark)
         AddFireLight(x, y, 80 * pulse, 1.10f * pulse, 0.90f * pulse, 0.62f * pulse, 0.8f);
       else
