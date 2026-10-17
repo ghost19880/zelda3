@@ -448,6 +448,8 @@ static float g_vis_x, g_vis_y;     // posizione della vista libera
 static int g_last_lx, g_last_ly;   // Link nel frame precedente
 static bool g_vis_valid;
 static int g_prev_mode;
+static int g_prev_module;
+static bool g_vis_glide;           // uscita da una casa: la vista scivola al suo posto
 
 // Avvicina v a t, muovendosi al massimo quanto Link (m) piu' un quarto di
 // pixel; mentre Link cammina la vista non va mai nel verso opposto al suo,
@@ -483,8 +485,11 @@ void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
     *cam_y = gy + g_world_dy;
     return;
   }
+  int prev_module = g_prev_module;
+  g_prev_module = main_module_index;
+  // fase 10: Link esce dalla porta dopo il cerchio che si apre
   int mode = !HdWorld_Active() ? 0 : InFluteArrival() ? 1 : main_module_index != 9 ? 0 :
-             submodule_index == 0 || InMapReturn() ? 1 : InTransition() ? 2 :
+             submodule_index == 0 || submodule_index == 10 || InMapReturn() ? 1 : InTransition() ? 2 :
              InMosaicTransition() ? 3 : 0;
   int prev_mode = g_prev_mode;
   g_prev_mode = mode;
@@ -535,8 +540,23 @@ void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
     if (gx != ow_scroll_vars0.xend && tx > gx) tx = gx;
     if (gy != ow_scroll_vars0.ystart && ty < gy) ty = gy;
     if (gy != ow_scroll_vars0.yend && ty > gy) ty = gy;
-    if (!g_vis_valid) {
+    if (!g_vis_valid && prev_module == 16) {
+      // Uscita da una casa: durante il cerchio che si apre la vista e' quella
+      // del gioco (le aree vicine comparirebbero fuori dal cerchio); da li'
+      // scivola dolcemente al suo posto invece di saltare
+      g_vis_x = (float)gx, g_vis_y = (float)gy;
+      g_vis_glide = true;
+    } else if (!g_vis_valid) {
       g_vis_x = (float)tx, g_vis_y = (float)ty;
+      g_vis_glide = false;
+    } else if (g_vis_glide) {
+      float dx = tx - g_vis_x, dy = ty - g_vis_y;
+      if (fabsf(dx) < 0.5f && fabsf(dy) < 0.5f) {
+        g_vis_x = (float)tx, g_vis_y = (float)ty;
+        g_vis_glide = false;
+      } else {
+        g_vis_x += dx * 0.12f, g_vis_y += dy * 0.12f;
+      }
     } else {
       // La vista insegue quel punto muovendosi al massimo quanto Link piu'
       // un quarto di pixel per frame: segue sempre Link, e le differenze
