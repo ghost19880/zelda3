@@ -2912,6 +2912,10 @@ void Overworld_Memorize_Map16_Change(uint16 pos, uint16 value) {  // 8edd40
   }
 
   int x = num_memorized_tiles;
+  // La lista ha posto per 256 caselle: con il mondo persistente si riempie
+  // visita dopo visita, e oltre scriverebbe sulle variabili che seguono
+  if (x >= 0x200)
+    return;
   memorized_tile_value[x >> 1] = value;
   memorized_tile_addr[x >> 1] = pos;
   num_memorized_tiles = x + 2;

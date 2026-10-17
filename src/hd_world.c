@@ -629,9 +629,6 @@ static void RenderArea(AreaImage *img, int head) {
   memcpy(ppu->vram, g_saved_vram, sizeof(g_saved_vram));
 }
 
-static uint32 StateVersion(int head);
-static void ApplyTiles(int head, bool memorize);
-
 static bool IsCached(int head) {
   uint32 key = AreaKey(head), ver = StateVersion(head);
   for (int i = 0; i < kMaxImages; i++)
@@ -784,8 +781,8 @@ static void DrawAnimatedCells(uint8 *pixels, int pitch, int width, int height, i
   for (int i = 0; i < kMaxImages; i++) {
     AreaImage *img = &g_images[i];
     if (!img->key || !img->n_anim || ((img->key ^ BYTE(overworld_screen_index)) & 0x40) ||
-        img->version != StateVersion(img->key & 0x7f))
-      continue;  // vuota, dell'altro mondo, o una versione vecchia dell'area
+        img->version != StateVersion(img->key & 0x7f) || img->key != AreaKey(img->key & 0x7f))
+      continue;  // vuota, dell'altro mondo, o una versione vecchia dell'area (o di prima di un evento)
     if (img->x + img->size <= cam_x || img->x >= cam_x + width ||
         img->y + img->size <= cam_y || img->y >= cam_y + height)
       continue;
@@ -796,6 +793,13 @@ static void DrawAnimatedCells(uint8 *pixels, int pitch, int width, int height, i
         continue;
       if (ac->y + 8 > img->size - kHiddenRows)
         continue;  // ultime righe nascoste: lasciate come sono
+      // celle allineate a 8 pixel e aree a 512: questi controlli valgono per
+      // tutta la cella
+      int cwx = img->x + ac->x, cwy = img->y + ac->y;
+      if (!all && HdWorld_InsideCurrentArea(cwx, cwy))
+        continue;  // qui disegna gia' il gioco
+      if (HeadAt(cwx, cwy) != (img->key & 0x7f))
+        continue;  // coperta da un'altra area (o fuori dalla mappa)
       int e = ac->entry, tile = e & 0x3ff;
       bool hf = (e & 0x4000) != 0, vf = (e & 0x8000) != 0;
       const uint16 *t = &ppu->vram[(chr_base + tile * 16) & 0x7fff];
@@ -813,10 +817,6 @@ static void DrawAnimatedCells(uint8 *pixels, int pitch, int width, int height, i
           uint32 l = dst[sx] >> 24;
           if (l == 2 || l == 4 || l == 6)
             continue;  // HUD e sprite restano davanti
-          if (!all && HdWorld_InsideCurrentArea(cam_x + sx, cam_y + sy))
-            continue;  // qui disegna gia' il gioco
-          if (HeadAt(cam_x + sx, cam_y + sy) != (img->key & 0x7f))
-            continue;  // coperta da un'altra area (o fuori dalla mappa)
           int bit = hf ? col : 7 - col;
           int v = (p01 >> bit & 1) | (p01 >> (8 + bit) & 1) << 1 |
                   (p23 >> bit & 1) << 2 | (p23 >> (8 + bit) & 1) << 3;
@@ -933,6 +933,9 @@ void HdWorld_Composite(uint8 *pixels, int pitch, int width, int height) {
   Ppu *ppu = g_zenv.ppu;
   bool mosaic = InMosaicTransition();
   bool all = InTransition() || mosaic;
+  // aspetto dei nemici, anche quando la vista coincide con quella del gioco
+  if (main_module_index == 9 && submodule_index == 0 && PersistOn())
+    CaptureEnemies(pixels, pitch, width, height);
   if (!all && g_world_dx == 0 && g_world_dy == 0 && ppu->extraLeftRight == 0) {
     PrefetchNeighbors();
     return;
@@ -944,8 +947,6 @@ void HdWorld_Composite(uint8 *pixels, int pitch, int width, int height) {
   int cam_y = (int16)BG2VOFS_copy + ppu->bgBiasY + 1;
   int ax, ay, as;
   AreaRect(overworld_screen_index, &ax, &ay, &as);
-  if (main_module_index == 9 && submodule_index == 0 && PersistOn())
-    CaptureEnemies(pixels, pitch, width, height);
   // area vicina non ancora disegnata (al massimo un frame): colore di fondo
   uint32 outside = Bgr15ToPixel(main_palette_buffer[0], 5);
   int last_head = -2, edge_head = -2, edge_side = -1;

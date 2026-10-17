@@ -933,9 +933,14 @@ int Sprite_ShowSolicitedMessage(int k, uint16 msg) {  // 85e1a7
       Sprite_CheckIfLinkIsBusy())
     return sprite_D[k];
   // HUD moderno: Link e' nella posizione giusta per parlare (manca solo A)
-  if (!sprite_delay_aux4[k] && link_auxiliary_state != 2 &&
-      link_direction_facing == kShowMessageFacing_Tab0[Sprite_DirectionToFaceLink(k, NULL)])
-    HdHud_CanTalk();
+  // (tmp_counter si conserva: il gioco originale chiama
+  // Sprite_DirectionToFaceLink solo premendo A)
+  if ((enhanced_features0 & kFeatures0_ModernHud) && !sprite_delay_aux4[k] && link_auxiliary_state != 2) {
+    uint8 saved_tmp_counter = tmp_counter;
+    if (link_direction_facing == kShowMessageFacing_Tab0[Sprite_DirectionToFaceLink(k, NULL)])
+      HdHud_CanTalk();
+    tmp_counter = saved_tmp_counter;
+  }
   if (!(filtered_joypad_L & 0x80) ||
       sprite_delay_aux4[k] || link_auxiliary_state == 2)
     return sprite_D[k];
