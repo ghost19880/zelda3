@@ -21,6 +21,8 @@ void HdFx_MarkWater(uint8 *pixels, int pitch, int width, int height, int bias_x,
 bool HdFx_SunnyOutdoors(void);
 // Sfoca e scurisce il gioco dietro inventario, dialoghi e menu
 void HdFx_MenuBlur(uint8 *pixels, int pitch, int width, int height);
+// Sfocatura in corso: lo shader non si applica finche' c'e'
+bool HdFx_MenuBlurActive(void);
 // Cerchio di transizione (entrate e uscite) morbido e su tutta la larghezza
 typedef struct Ppu Ppu;
 void HdFx_IrisBeforeRender(Ppu *ppu);

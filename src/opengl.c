@@ -7,6 +7,7 @@
 #include "glsl_shader.h"
 #include "config.h"
 #include "hd_menu.h"
+#include "hd_fx.h"
 
 #define CODE(...) #__VA_ARGS__
 
@@ -232,9 +233,13 @@ static void OpenGLRenderer_EndDraw() {
   glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT);
 
-  if (g_glsl_shader == NULL) {
+  // Con il gioco sfocato dietro inventario e menu lo shader non si applica:
+  // torna appena la sfocatura finisce
+  if (g_glsl_shader == NULL || HdFx_MenuBlurActive()) {
     glViewport(viewport_x, viewport_y, viewport_width, viewport_height);
     glUseProgram(g_program);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g_texture.gl_texture);
     int filter = g_config.linear_filtering ? GL_LINEAR : GL_NEAREST;
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);

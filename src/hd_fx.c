@@ -673,14 +673,22 @@ static void BoxBlur1D(const int32 *src, int32 *dst, int n, int stride, int r) {
   }
 }
 
+static float g_blur_amount;  // 0 = niente sfocatura, 1 = piena
+
+bool HdFx_MenuBlurActive(void) {
+  // sulla mappa del mondo (Mode 7) la sfocatura non viene disegnata
+  return g_blur_amount > 0 && g_zenv.ppu->mode != 7;
+}
+
 void HdFx_MenuBlur(uint8 *pixels, int pitch, int width, int height) {
-  static float amount;
+  float amount = g_blur_amount;
   static uint8 last_frame;
   int mod = main_module_index, sub = submodule_index;
+  // inventario (1), menu di salvataggio (11) e menu opzioni; non i dialoghi
   bool want = g_fx_menu_blur &&
-      ((mod == 14 && (sub == 1 || sub == 2 || sub == 11)) || HdMenu_IsOpen());
+      ((mod == 14 && (sub == 1 || sub == 11)) || HdMenu_IsOpen());
   if (!want) {
-    amount = 0;
+    g_blur_amount = 0;
     return;
   }
   // con il menu opzioni aperto il gioco e' fermo: la dissolvenza va avanti
@@ -688,6 +696,7 @@ void HdFx_MenuBlur(uint8 *pixels, int pitch, int width, int height) {
   if (last_frame != frame_counter || HdMenu_IsOpen()) {
     last_frame = frame_counter;
     amount = amount + 1.0f / 8 > 1 ? 1 : amount + 1.0f / 8;
+    g_blur_amount = amount;
   }
   int n = width * height;
   if (n > g_blur_cap) {
