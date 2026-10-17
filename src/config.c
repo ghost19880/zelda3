@@ -697,6 +697,12 @@ void Config_ResetControlsToDefault() {
     KeyMapHash_Add(key, kKeys_Controls + i);
     Config_SetPadButtonForCmd(kKeys_Controls + i, kDefaultGamepadCmds[i]);
   }
+  // anche il tasto del menu opzioni (Esc e R3): altrimenti, se era stato
+  // spostato su un tasto dei comandi, il menu non si aprirebbe piu'
+  int menu_key = kDefaultKbdControls[kKeys_HdMenu];
+  KeyMapHash_Rebuild(kKeys_HdMenu, menu_key);
+  KeyMapHash_Add(menu_key, kKeys_HdMenu);
+  Config_SetPadButtonForCmd(kKeys_HdMenu, kGamepadBtn_R3);
 }
 
 static bool LineIsKey(const char *line, const char *key) {

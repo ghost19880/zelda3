@@ -281,23 +281,43 @@ static int AutosaveCount() {
   return n < 1 ? 3 : n > kMaxAutosaves ? kMaxAutosaves : n;
 }
 
-// Restituisce lo slot automatico piu' recente (newest=true) o da sovrascrivere
+static int g_autosave_newest = -1;  // ultimo slot automatico scritto in questa sessione
+
+// Restituisce lo slot automatico piu' recente (newest=true) o da sovrascrivere.
+// Gli slot si scrivono a rotazione (0, 1, 2, 0...): quello da sovrascrivere e'
+// il successivo al piu' recente. L'orario dei file ha la precisione di un
+// secondo, quindi a parita' di orario il piu' recente e' l'ultimo nell'ordine
+// di rotazione.
 static int FindAutosave(bool newest) {
-  int best = -1;
-  time_t best_t = 0;
+  int n = AutosaveCount();
+  bool has[kMaxAutosaves];
+  time_t t[kMaxAutosaves];
   char name[64];
-  for (int i = 0; i < AutosaveCount(); i++) {
-    time_t t;
+  int any = -1;
+  for (int i = 0; i < n; i++) {
     AutosaveName(i, name, sizeof(name));
-    if (!FileTime(name, &t)) {
-      if (!newest)
-        return i;  // slot libero
-      continue;
-    }
-    if (best < 0 || (newest ? t > best_t : t < best_t))
-      best = i, best_t = t;
+    has[i] = FileTime(name, &t[i]);
+    if (!has[i] && !newest)
+      return i;  // slot libero
+    if (has[i] && (any < 0 || t[i] > t[any]))
+      any = i;
   }
-  return best < 0 ? 0 : best;
+  if (any < 0)
+    return 0;
+  int last = (g_autosave_newest >= 0 && g_autosave_newest < n && has[g_autosave_newest]) ? g_autosave_newest : -1;
+  if (last < 0) {
+    // fra gli slot con l'orario piu' recente, quello dopo il quale la
+    // rotazione non continua
+    last = any;
+    for (int i = 0; i < n; i++) {
+      int next = (i + 1) % n;
+      if (has[i] && t[i] == t[any] && !(has[next] && t[next] == t[any])) {
+        last = i;
+        break;
+      }
+    }
+  }
+  return newest ? last : (last + 1) % n;
 }
 
 static void ShowMessage(const char *msg) {
@@ -331,9 +351,11 @@ void HdMenu_AfterFrame(bool is_replay) {
   if (first)
     return;  // non salvare appena caricato
   char name[64];
-  AutosaveName(FindAutosave(false), name, sizeof(name));
+  int slot = FindAutosave(false);
+  AutosaveName(slot, name, sizeof(name));
   // Salvataggio silenzioso: un messaggio a ogni cambio di area disturberebbe
   SaveLoadNamed(kSaveLoad_Save, name);
+  g_autosave_newest = slot;
   g_save_icon_timer = kSaveIconFrames;
 }
 
