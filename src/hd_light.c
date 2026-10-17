@@ -255,6 +255,10 @@ static void CollectLights(int mod, bool dark, int frame_w, int bias_x, int bias_
     }
     if (!IsFireAncilla(ancilla_type[k], &radius))
       continue;
+    // La Lanterna non fa bagliore dove e' gia' tutto illuminato (all'aperto,
+    // stanze normali, stanze buie con le torce accese): solo nel buio
+    if (ancilla_type[k] == 0x2f && (!dark || g_ambient >= 0.999f))
+      continue;
     float x = (ancilla_x_hi[k] << 8 | ancilla_x_lo[k]) + 8 - cam_x + ext;
     float y = (ancilla_y_hi[k] << 8 | ancilla_y_lo[k]) + 8 - cam_y;
     radius *= 1.0f + 0.08f * sinf(t * 1.9f + k);

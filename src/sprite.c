@@ -1119,6 +1119,9 @@ void Sprite_SpawnSecret(int k) {  // 868264
   }
 }
 
+// Nemico (0-15) che ha scritto ogni voce OAM nell'ultimo frame, 0xff = nessuno
+uint8 g_sprite_oam_owner[128];
+
 void Sprite_Main() {  // 868328
   if (!player_is_indoors) {
     ancilla_floor[0] = 0;
@@ -1150,9 +1153,22 @@ void Sprite_Main() {  // 868328
   Ancilla_Main();
   Overlord_Main();
   archery_game_out_of_arrows = 0;
+  memset(g_sprite_oam_owner, 0xff, sizeof(g_sprite_oam_owner));
   for (int i = 15; i >= 0; i--) {
     cur_object_index = i;
+    // Si segna quali voci OAM scrive ogni nemico (come per Link in
+    // LinkOam_Main): con la vista spostata la posizione di ogni pezzo si
+    // ricava dal suo nemico invece che dall'oggetto piu' vicino
+    uint16 saved[128];
+    for (int j = 0; j < 128; j++)
+      saved[j] = WORD(oam_buf[j].charnum), WORD(oam_buf[j].charnum) = 0xffff;
     Sprite_ExecuteSingle(i);
+    for (int j = 0; j < 128; j++) {
+      if (WORD(oam_buf[j].charnum) != 0xffff)
+        g_sprite_oam_owner[j] = i;
+      else
+        WORD(oam_buf[j].charnum) = saved[j];
+    }
   }
   Garnish_ExecuteLowerSlots();
   byte_7E069E[0] = byte_7E069E[1] = 0;

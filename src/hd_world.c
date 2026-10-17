@@ -120,7 +120,7 @@ bool HdWorld_InsideCurrentArea(int wx, int wy) {
 
 enum { kMaxExtra = 1024 };  // erba tagliata e buche della pala
 enum { kMaxTiles = 256, kMaxKilled = 128, kMaxAlive = 16, kEnemyResetGap = 2 };  // 2 quadrati in mezzo = 3 aree
-enum { kPatchW = 48, kPatchH = 56 };
+enum { kPatchW = 64, kPatchH = 72 };
 
 // Tabelle del gioco con un valore per ogni nemico (indirizzo in g_ram, byte)
 typedef struct SpriteField { uint32 addr; uint8 size; } SpriteField;
@@ -363,7 +363,9 @@ static void CaptureEnemies(uint8 *pixels, int pitch, int width, int height) {
     if (!IsAreaEnemy(k))
       continue;
     int wx = SpriteWorldX(k), wy = SpriteWorldY(k), z = sprite_z[k];
-    int ox = -16, oy = -36;  // riquadro largo: lance, elmi e scudi non vanno tagliati
+    // riquadro largo: lance, elmi, scudi e la spada abbassata dei soldati
+    // (fino a 28 pixel sotto) non vanno tagliati
+    int ox = -24, oy = -36;
     int sx = wx + ox - cam_x, sy = wy - z + oy - cam_y;
     if (sx < 0 || sy < 0 || sx + kPatchW > width || sy + kPatchH > height)
       continue;  // non tutto sullo schermo: si tiene l'aspetto precedente
@@ -405,10 +407,20 @@ static void DrawFrozenEnemies(uint8 *pixels, int pitch, int width, int height, i
   int cur = BYTE(overworld_screen_index) & 0x7f;
   for (int a = 0; a < 128; a++) {
     AreaState *st = &g_states[a];
-    if (!st->used || a == cur || ((a ^ cur) & 0x40) || !st->n_alive)
+    // l'area appena raggiunta si salta, tranne nel primo frame del passaggio,
+    // quando il gioco non ha ancora caricato i suoi nemici (sparivano per un
+    // frame)
+    if (!st->used || (a == cur && !InTransition()) || ((a ^ cur) & 0x40) || !st->n_alive)
       continue;
     for (int i = 0; i < st->n_alive; i++) {
       EnemyRec *r = &st->alive[i];
+      if (a == cur) {
+        bool loaded = false;
+        for (int k = 0; k < 16 && !loaded; k++)
+          loaded = sprite_state[k] && sprite_N_word[k] == r->blk;
+        if (loaded)
+          continue;
+      }
       EnemyPatch *pt = NULL;
       for (int j = 0; j < kMaxAlive && !pt; j++)
         if (g_patches[a][j].valid && g_patches[a][j].blk == r->blk)
