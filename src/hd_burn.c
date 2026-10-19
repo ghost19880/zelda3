@@ -17,6 +17,7 @@
 #include "sprite.h"
 #include "misc.h"
 #include "ancilla.h"
+#include "hd_fx.h"
 
 enum {
   kMaxPending = 128,
@@ -204,14 +205,20 @@ static void BurnOut(uint16 x, uint16 y) {
 }
 
 bool HdBurn_Ignite(uint16 x, uint16 y) {
-  if (player_is_indoors || !(enhanced_features0 & kFeatures0_SwordAndItems))
+  // sotto la pioggia il fuoco non attecchisce
+  if (player_is_indoors || !(enhanced_features0 & kFeatures0_SwordAndItems) || HdFx_IsRainingOutdoors())
     return false;
   return StartBurning(x & ~0xf, y & ~0xf);
 }
 
+void HdBurn_Reset(void) {
+  ClearAll();
+  g_num_scorched = 0;
+}
+
 void HdBurn_Update(void) {
   if (player_is_indoors) {
-    ClearAll();
+    HdBurn_Reset();
     return;
   }
   // Il fuoco si ferma durante menu e transizioni

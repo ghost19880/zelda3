@@ -927,6 +927,10 @@ const uint16 *Hud_GetItemIconTiles(int item) {
   return Hud_GetIconForItem(item)->v;
 }
 
+bool Hud_HaveItem(int item) {
+  return Hud_DoWeHaveThisItem(item);
+}
+
 const uint16 *Hud_GetSwordIconTiles(void) {
   return kHudItemSword[link_sword_type == 0xff || link_sword_type > 4 ? 0 : link_sword_type].v;
 }
@@ -1050,7 +1054,8 @@ void Hud_DrawAbilityBox() {  // 8de6b6
   uint16 *dst = uvram_screen.row[0].col;
   int x = kNewStyleInventory ? 0 : 1;
 
-  Hud_DrawBox(dst, x, 21, 19, 29, 1);
+  // largo come il riquadro degli oggetti sopra (Hud_DrawYButtonItems)
+  Hud_DrawBox(dst, x, 21, 20 - x, 29, 1);
 
   uint8 flags = link_ability_flags;
   for (int i = 0; i < 2; i++, flags <<= 1) {

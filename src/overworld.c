@@ -3553,6 +3553,43 @@ static int Overworld_SmashSmallObj(uint16 x, uint16 y, uint16 pos, uint16 attr, 
   return rv;
 }
 
+// Boomerang Magico: taglia il cespuglio o l'erba alta che tocca nel punto
+// px, py (in pixel), come la spada, con resti, segreti e oggetti nascosti.
+// -1 se non c'e' niente da tagliare, 1 se sotto c'era qualcosa (un oggetto o
+// un segreto: il boomerang torna indietro), altrimenti 0.
+int Overworld_BoomerangCut(uint16 px, uint16 py) {
+  uint16 dx = px - overworld_offset_base_x * 8, dy = py - overworld_offset_base_y;
+  if (player_is_indoors || dx > (overworld_offset_mask_x * 8 | 0xf) || dy > (overworld_offset_mask_y | 0xf))
+    return -1;
+  uint16 x = px >> 3, y = py;
+  uint16 pos = ((y - overworld_offset_base_y) & overworld_offset_mask_y) * 8 +
+    ((x - overworld_offset_base_x) & overworld_offset_mask_x);
+  uint16 attr = overworld_tileattr[pos >> 1], repl;
+  uint8 what;
+  if (attr == 0x36)
+    repl = 0xdc7, what = 2;  // cespuglio
+  else if (attr == 0x72a)
+    repl = 0xdc8, what = 4;  // cespuglio del Mondo delle Tenebre
+  else if (attr == 0x37e)
+    repl = 0xdc5, what = 3;  // erba alta
+  else
+    return -1;
+  uint16 secret = Overworld_RevealSecret(pos);
+  bool found = secret != 0 || (BYTE(dung_secrets_unk1) != 0 && BYTE(dung_secrets_unk1) != 0xff);
+  if (secret != 0)
+    repl = secret;
+  overworld_tileattr[pos >> 1] = repl;
+  Overworld_Memorize_Map16_Change(pos, repl);
+  Overworld_DrawMap16(pos, repl);
+  nmi_load_bg_from_vram = 1;
+  uint16 tx = px & ~0xf, ty = py & ~0xf;
+  if (what == 3)  // l'erba alta si taglia a quadretti di 8 (come la spada)
+    tx = (px & ~7) - 8, ty = (py - 8) & ~7;
+  Sprite_SpawnImmediatelySmashedTerrain(what, tx, ty);
+  AncillaAdd_BushPoof(tx, ty);
+  return found;
+}
+
 uint16 Overworld_ToolAndTileInteraction(uint16 x, uint16 y) {  // 9bbd82
   word_7E04B2 = 0;
   index_of_interacting_tile = 0;

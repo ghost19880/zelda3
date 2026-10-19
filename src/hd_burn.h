@@ -10,6 +10,9 @@
 bool HdBurn_Ignite(uint16 x, uint16 y);
 // Fa avanzare l'incendio: una volta per frame
 void HdBurn_Update(void);
+// Spegne tutto e dimentica le tile annerite: entrando in una casa o
+// caricando un salvataggio il gioco fa ricrescere tutti i cespugli
+void HdBurn_Reset(void);
 
 // Per il disegno delle fiamme (hd_fx.c) e della loro luce (hd_light.c)
 enum {

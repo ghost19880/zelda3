@@ -490,6 +490,12 @@ static bool IsRaining(int mod) {
   return sram_progress_indicator < 2 && si != 3 && si != 5 && si != 7;
 }
 
+// Piove nell'area esterna attuale (anche con l'effetto della pioggia spento):
+// sotto la pioggia il fuoco non attecchisce (hd_burn.c)
+bool HdFx_IsRainingOutdoors(void) {
+  return !player_is_indoors && IsRaining(9);
+}
+
 // Acqua: i pixel del fondale che cadono su caselle d'acqua (profonda 0x08,
 // bassa 0x09) vengono marcati con il layer 7, cosi' lo shader sa dove non
 // mettere le pennellate (in Four Swords l'acqua non le ha).
@@ -1015,7 +1021,10 @@ void HdFx_SoftIris(uint8 *pixels, int pitch, int width, int height) {
     return;
   const float kSoft = 8.0f;
   int ext = (width - 256) / 2;
-  float cx = g_hd_iris_x + ext + 0.5f, cy = g_hd_iris_y + 0.5f;
+  // con la vista spostata (mondo continuo) Link, e con lui il centro del
+  // cerchio, si disegna spostato come gli sprite
+  Ppu *ppu = g_zenv.ppu;
+  float cx = g_hd_iris_x - ppu->objBiasX + ext + 0.5f, cy = g_hd_iris_y - ppu->objBiasY + 0.5f;
   float far2 = 0;
   for (int k = 0; k < 4; k++) {
     float dx = (k & 1 ? width : 0) - cx, dy = (k & 2 ? height : 0) - cy;
@@ -1043,13 +1052,128 @@ void HdFx_SoftIris(uint8 *pixels, int pitch, int width, int height) {
 }
 
 // ---------------------------------------------------------------------------
-// Ombre di personaggi, nemici e oggetti: la sagoma di ogni sprite viene
+// Ombre di Link e dei nemici a terra: la sagoma di ogni sprite viene
 // "sdraiata" a terra partendo dai piedi (il pixel piu' basso di ogni colonna),
 // inclinata verso il basso a destra come le ombre dello shader, sfocata e
 // usata per scurire il fondale. Sprite e HUD non vengono scuriti.
+// Fanno ombra solo i pezzi di Link a terra e dei nemici a terra che nel gioco
+// hanno l'ombra: per questi l'ombra del gioco si nasconde. I nemici in volo
+// (o mentre saltano) tengono l'ombra del gioco; effetti, oggetti in volo e
+// resti non fanno ombra. La PPU segna pixel per pixel da quale voce OAM viene
+// lo sprite (objShadowOut).
 
 static float *g_shadow, *g_shadow_tmp;
 static int g_shadow_cap;
+static uint8 *g_shadow_src;   // 1 = lo sprite di questo pixel fa ombra
+static int g_shadow_src_cap;
+static bool g_shadow_src_valid;
+static uint16 g_hidden_oam[128];
+static uint8 g_hidden_idx[128];
+static int g_num_hidden;
+
+extern uint8 g_link_oam_mask[128], g_sprite_oam_owner[128];
+
+// Ombra del gioco (SpriteDraw_Shadow): casella 0x6c (grande) o 0x38 (piccola)
+// della prima tabella, palette 4
+static bool IsGameShadowTile(uint16 oam1) {
+  return (oam1 >> 9 & 7) == 4 && ((oam1 & 0x1ff) == 0x6c || (oam1 & 0x1ff) == 0x38);
+}
+
+// Nemici che non camminano: volano o fluttuano (corvi, avvoltoi, pipistrelli,
+// api, fate, Poe, Bari, Zirro...), stanno in acqua o sui muri, o sono oggetti
+// fissi (interruttori, statue, Beamos, trappole, barre di fuoco). Non fanno
+// l'ombra morbida: tengono quella del gioco, se ce l'hanno.
+static bool IsNotWalkingType(uint8 t) {
+  static const uint8 kTypes[] = {
+    0x00, 0x01, 0x02, 0x15, 0x19, 0x1c, 0x1e, 0x23, 0x24, 0x2d, 0x38, 0x3a, 0x52,
+    0x54, 0x55, 0x59, 0x5b, 0x5c, 0x61, 0x6f, 0x72, 0x79, 0x7d, 0x7e, 0x7f, 0x81,
+    0x82, 0x88, 0x8a, 0x8c, 0x90, 0x95, 0x96, 0x97, 0x98, 0x9a, 0xa0, 0xa2, 0xa3,
+    0xa4, 0xa8, 0xa9, 0xb2, 0xb3, 0xbe, 0xc5, 0xc6, 0xc8, 0xcf, 0xe3,
+  };
+  for (int i = 0; i < (int)sizeof(kTypes); i++)
+    if (kTypes[i] == t)
+      return true;
+  return false;
+}
+
+// Riga dello schermo della voce OAM i (come in ppu_evaluateSprites)
+static int OamScreenY(Ppu *ppu, int i, int bottom) {
+  int yy = ppu->oam[i * 2] >> 8;
+  int sy = ppu->objYValid ? ppu->objY[i] : yy >= bottom ? yy - 256 : yy;
+  return sy - ppu->objBiasY;
+}
+
+void HdFx_ShadowsBeforeRender(Ppu *ppu, int width, int height) {
+  int mod;
+  ppu->objShadowOut = NULL;
+  g_num_hidden = 0;
+  g_shadow_src_valid = false;
+  if (!g_fx_sprite_shadows || !InGameplay(&mod) || ppu->mode == 7)
+    return;
+  int n = width * height;
+  if (n > g_shadow_src_cap) {
+    free(g_shadow_src);
+    g_shadow_src = malloc(n);
+    g_shadow_src_cap = g_shadow_src ? n : 0;
+    if (!g_shadow_src)
+      return;
+  }
+  memset(g_shadow_src, 0, n);
+  bool link_on_ground = (int16)link_z_coord <= 0;
+  // Per ogni nemico: dov'e' la sua ombra del gioco e dove finisce il corpo.
+  // Un nemico che cammina e' a terra se non e' in aria (sprite_z) e, quando
+  // ha l'ombra del gioco, se questa tocca i piedi: in volo fra corpo e ombra
+  // c'e' spazio, anche per chi si alza senza usare sprite_z
+  int bottom = height > 224 ? 240 : 224;
+  int shadow_top[16], body_bottom[16];
+  for (int k = 0; k < 16; k++)
+    shadow_top[k] = 1 << 20, body_bottom[k] = -(1 << 20);
+  for (int i = 0; i < 128; i++) {
+    int o = g_sprite_oam_owner[i];
+    if (o >= 16 || g_link_oam_mask[i] || (ppu->oam[i * 2] >> 8) == 0xf0)
+      continue;
+    int y = OamScreenY(ppu, i, bottom);
+    int size = (ppu->oam[0x100 + (i >> 3)] >> ((i & 7) * 2) & 2) ? 16 : 8;
+    if (IsGameShadowTile(ppu->oam[i * 2 + 1])) {
+      if (y < shadow_top[o]) shadow_top[o] = y;
+    } else if (y + size > body_bottom[o]) {
+      body_bottom[o] = y + size;
+    }
+  }
+  bool ground[16];
+  for (int k = 0; k < 16; k++)
+    ground[k] = (sprite_state[k] == 9 || sprite_state[k] == 11) && sprite_type[k] < 0xd8 &&
+                !IsNotWalkingType(sprite_type[k]) && sprite_z[k] == 0 &&
+                (shadow_top[k] == (1 << 20) || shadow_top[k] <= body_bottom[k] + 2);
+  for (int i = 0; i < 128; i++) {
+    bool shadow = IsGameShadowTile(ppu->oam[i * 2 + 1]);
+    int o = g_sprite_oam_owner[i];
+    uint8 cast = 0;
+    if (g_link_oam_mask[i]) {
+      cast = !shadow && link_on_ground;
+    } else if (o < 16 && ground[o]) {
+      if (shadow) {
+        g_hidden_idx[g_num_hidden] = i;
+        g_hidden_oam[g_num_hidden++] = ppu->oam[i * 2];
+        ppu->oam[i * 2] = (ppu->oam[i * 2] & 0xff) | 0xf000;  // y = 0xF0: non si disegna
+        ppu->objShowF0[i] = 0;
+      } else {
+        cast = 1;
+      }
+    }
+    ppu->objCastShadow[i] = cast;
+  }
+  ppu->objShadowOut = g_shadow_src;
+  ppu->objShadowStride = width;
+}
+
+void HdFx_ShadowsAfterRender(Ppu *ppu) {
+  for (int j = 0; j < g_num_hidden; j++)
+    ppu->oam[g_hidden_idx[j] * 2] = g_hidden_oam[j];
+  g_num_hidden = 0;
+  g_shadow_src_valid = ppu->objShadowOut != NULL;
+  ppu->objShadowOut = NULL;
+}
 
 static void BoxBlurF(const float *src, float *dst, int w, int h, int dx, int dy) {
   for (int y = 0; y < h; y++)
@@ -1066,7 +1190,7 @@ static void BoxBlurF(const float *src, float *dst, int w, int h, int dx, int dy)
 
 void HdFx_SpriteShadows(uint8 *pixels, int pitch, int width, int height) {
   int mod;
-  if (!g_fx_sprite_shadows || !InGameplay(&mod))
+  if (!g_fx_sprite_shadows || !InGameplay(&mod) || !g_shadow_src_valid)
     return;
   int n = width * height;
   if (n > g_shadow_cap) {
@@ -1082,12 +1206,12 @@ void HdFx_SpriteShadows(uint8 *pixels, int pitch, int width, int height) {
   for (int x = 0; x < width; x++) {
     int y = 0;
     while (y < height) {
-      if (!IsSprite(*(uint32 *)(pixels + y * pitch + x * 4))) {
+      if (!IsSprite(*(uint32 *)(pixels + y * pitch + x * 4)) || !g_shadow_src[y * width + x]) {
         y++;
         continue;
       }
       int y0 = y;
-      while (y < height && IsSprite(*(uint32 *)(pixels + y * pitch + x * 4)))
+      while (y < height && IsSprite(*(uint32 *)(pixels + y * pitch + x * 4)) && g_shadow_src[y * width + x])
         y++;
       int foot = y - 1;
       // ogni pixel alto h sopra i piedi finisce spostato a destra e in basso

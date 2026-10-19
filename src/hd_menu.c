@@ -476,7 +476,7 @@ static const char *Tr(const char *it) {
     { "Bagliore degli oggetti ricevuti", "Glow of received items" },
     { "Calore sopra la lava", "Heat haze over lava" },
     { "Pioggia e lampi migliorati", "Improved rain and lightning" },
-    { "Sfocatura dietro menu e dialoghi", "Blur behind menus and dialogues" },
+    { "Sfocatura dietro menu", "Blur behind menus" },
     { "Ombre di personaggi e nemici", "Shadows of characters and enemies" },
     { "Cerchio di transizione morbido", "Soft transition circle" },
     { "Suggerimenti dei tasti", "Button hints" },
@@ -672,7 +672,7 @@ static void BuildItems() {
     AddItem(9, "Bagliore degli oggetti ricevuti", YesNo(g_config.fx_item_glow));
     AddItem(10, "Calore sopra la lava", YesNo(g_config.fx_heat_haze));
     AddItem(11, "Pioggia e lampi migliorati", YesNo(g_config.fx_rain));
-    AddItem(12, "Sfocatura dietro menu e dialoghi", YesNo(g_config.fx_menu_blur));
+    AddItem(12, "Sfocatura dietro menu", YesNo(g_config.fx_menu_blur));
     AddItem(13, "Ombre di personaggi e nemici", YesNo(g_config.fx_sprite_shadows));
     AddItem(14, "Cerchio di transizione morbido", YesNo(g_config.fx_soft_iris));
     AddItem(15, "Suggerimenti dei tasti", YesNo(g_config.fx_button_hints));
