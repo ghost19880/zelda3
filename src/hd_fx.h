@@ -41,5 +41,7 @@ void HdFx_ShadowsBeforeRender(Ppu *ppu, int width, int height);
 void HdFx_ShadowsAfterRender(Ppu *ppu);
 // Piove nell'area esterna attuale
 bool HdFx_IsRainingOutdoors(void);
+// Sulla Montagna della Morte: il colore v della palette pal e' nuvola
+bool HdFx_IsCloudColor(int pal, int v);
 
 #endif  // ZELDA3_HD_FX_H_

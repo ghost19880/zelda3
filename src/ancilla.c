@@ -832,8 +832,8 @@ static void FireRodShot_BurnAhead(int k) {
     return;
   int d = ancilla_dir[k] & 3;
   uint16 x = Ancilla_GetX(k), y = Ancilla_GetY(k);
-  HdBurn_Ignite(x + kProbe8_X[d], y + kProbe8_Y[d]);
-  HdBurn_Ignite(x + kProbe12_X[d], y + kProbe12_Y[d]);
+  HdBurn_Ignite(x + kProbe8_X[d], y + kProbe8_Y[d], true);
+  HdBurn_Ignite(x + kProbe12_X[d], y + kProbe12_Y[d], true);
 }
 
 void Ancilla02_FireRodShot(int k) {  // 8886d2

@@ -687,7 +687,8 @@ static void DrawLoadedArea(AreaImage *img) {
   int n16 = img->size / 16;
   int a = BYTE(overworld_screen_index), sc = a & 0x3f;
   bool backdrop_scene = sc == 0x03 || sc == 0x05 || sc == 0x07 || a == 0x5b;
-  // sulla montagna le nuvole (palette 3) non hanno pennellate, come l'acqua (hd_fx.c)
+  // sulla montagna le nuvole non hanno pennellate, come l'acqua (hd_fx.c,
+  // HdFx_IsCloudColor)
   bool mountain = sc == 0x03 || sc == 0x05 || sc == 0x07;
   uint32 backdrop = Bgr15ToPixel(main_palette_buffer[0], backdrop_scene ? 3 : 5);
   for (int r = 0; r < n16; r++) {
@@ -701,7 +702,7 @@ static void DrawLoadedArea(AreaImage *img) {
         const uint16 *t = &ppu->vram[(chr_base + tile * 16) & 0x7fff];
         uint8 at = attr8[e & 0x1ff];
         bool water = (at == 0x08 || at == 0x09);
-        bool smooth = water || (mountain && pal == 3);
+        bool cloud_tile = mountain && (pal == 3 || pal == 7);
         if (tile >= kAnimTileFirst && tile < kAnimTileEnd) {
           if (img->n_anim == img->cap_anim) {
             int cap = img->cap_anim ? img->cap_anim * 2 : 256;
@@ -714,7 +715,8 @@ static void DrawLoadedArea(AreaImage *img) {
             ac->x = ox, ac->y = oy, ac->entry = e;
             ac->color[0] = water && !backdrop_scene ? (backdrop & 0xffffff) | 7u << 24 : backdrop;
             for (int v = 1; v < 16; v++)
-              ac->color[v] = Bgr15ToPixel(main_palette_buffer[pal * 16 + v], smooth ? 7 : 1);
+              ac->color[v] = Bgr15ToPixel(main_palette_buffer[pal * 16 + v],
+                                          water || (cloud_tile && HdFx_IsCloudColor(pal, v)) ? 7 : 1);
           }
         }
         for (int row = 0; row < 8; row++) {
@@ -727,7 +729,8 @@ static void DrawLoadedArea(AreaImage *img) {
                     (p23 >> bit & 1) << 2 | (p23 >> (8 + bit) & 1) << 3;
             // sulla montagna lo sfondo e' il cielo anche nelle caselle che per
             // il gioco sono acqua profonda (il vuoto oltre i dirupi)
-            dst[col] = v ? Bgr15ToPixel(main_palette_buffer[pal * 16 + v], smooth ? 7 : 1) :
+            dst[col] = v ? Bgr15ToPixel(main_palette_buffer[pal * 16 + v],
+                                        water || (cloud_tile && HdFx_IsCloudColor(pal, v)) ? 7 : 1) :
                        water && !backdrop_scene ? (backdrop & 0xffffff) | 7u << 24 : backdrop;
           }
         }

@@ -521,6 +521,37 @@ static bool IsMountainScene(void) {
   return a < 0x80 && (sc == 0x03 || sc == 0x05 || sc == 0x07);
 }
 
+// Colore v della palette pal sulla montagna: le caselle con la palette 3
+// sono il bordo delle nuvole (tutta la casella); in quelle con la palette 7
+// l'interno delle nuvole sono solo i due rosa (colori 13 e 15), gli altri
+// colori sono ponti, pilastri e dirupi
+bool HdFx_IsCloudColor(int pal, int v) {
+  return pal == 3 || (pal == 7 && (v == 13 || v == 15));
+}
+
+// Pixel di nuvola nella riga row della casella e della mappa (bit 7 = primo
+// pixel a sinistra), letti dalla grafica in VRAM come fa la PPU
+static uint8 CloudRowMask(uint16 e, int row) {
+  int pal = e >> 10 & 7;
+  if (pal == 3)
+    return 0xff;
+  if (pal != 7)
+    return 0;
+  Ppu *ppu = g_zenv.ppu;
+  const uint16 *t = &ppu->vram[(ppu->bgLayer[1].tileAdr + (e & 0x3ff) * 16) & 0x7fff];
+  int rr = (e & 0x8000) ? 7 - row : row;
+  uint16 p01 = t[rr], p23 = t[rr + 8];
+  uint8 mask = 0;
+  for (int col = 0; col < 8; col++) {
+    int bit = (e & 0x4000) ? col : 7 - col;
+    int v = (p01 >> bit & 1) | (p01 >> (8 + bit) & 1) << 1 |
+            (p23 >> bit & 1) << 2 | (p23 >> (8 + bit) & 1) << 3;
+    if (HdFx_IsCloudColor(pal, v))
+      mask |= 0x80 >> col;
+  }
+  return mask;
+}
+
 int HdFx_SceneModule(void) {
   int m = main_module_index, sub = submodule_index;
   if (m == 14) {
@@ -553,8 +584,9 @@ int HdFx_SceneModule(void) {
 void HdFx_MarkWater(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y) {
   // anche durante il cerchio di transizione e l'arrivo con l'Ocarina:
   // altrimenti lo shader dipingerebbe l'acqua per qualche fotogramma
+  // 11: aree speciali all'aperto (Dominio di Zora, bosco della Spada Suprema...)
   int mod = HdFx_SceneModule();
-  if (mod != 7 && mod != 9)
+  if (mod != 7 && mod != 9 && mod != 11)
     return;
   // sulla Montagna della Morte e alla Piramide il vuoto oltre i dirupi e'
   // "acqua profonda" per il gioco, ma sullo schermo e' il cielo: lo sfondo
@@ -572,7 +604,7 @@ void HdFx_MarkWater(uint8 *pixels, int pitch, int width, int height, int bias_x,
     for (int wy = y0; wy < cam_y + height; wy += 8) {
       for (int wx = x0; wx < cam_x - ext + width; wx += 8) {
         uint8 attr;
-        bool cloud = false;
+        uint16 cloud_e = 0;  // casella della mappa, se puo' contenere nuvole
         if (mod == 7)
           attr = dung_bg2_attr_table[((wy & 0x1f8) << 3) + ((wx & 0x1f8) >> 3) + (layer ? 0 : 0x1000)];
         else if (HdWorld_Active() && (HdWorld_BackgroundFromImages() || !HdWorld_InsideCurrentArea(wx, wy)))
@@ -580,16 +612,22 @@ void HdFx_MarkWater(uint8 *pixels, int pitch, int width, int height, int bias_x,
                      // passaggio la mappa del gioco e' ancora quella dell'area vecchia
         else {
           attr = Overworld_GetTileAttributeAtLocation((uint16)wx >> 3, (uint16)wy);
-          cloud = mountain && (Overworld_GetMap8AtLocation((uint16)wx >> 3, (uint16)wy) >> 10 & 7) == 3;
+          if (mountain) {
+            uint16 e = Overworld_GetMap8AtLocation((uint16)wx >> 3, (uint16)wy);
+            if ((e >> 10 & 7) == 3 || (e >> 10 & 7) == 7)
+              cloud_e = e;
+          }
         }
-        if (!IsWaterAttr(attr) && !cloud)
+        bool water = IsWaterAttr(attr);
+        if (!water && !cloud_e)
           continue;
         for (int y = wy - cam_y; y < wy - cam_y + 8; y++) {
           if (y < 0 || y >= height)
             continue;
           uint32 *row = (uint32 *)(pixels + y * pitch);
+          uint8 mask = water ? 0xff : CloudRowMask(cloud_e, (y + cam_y) & 7);
           for (int x = wx - cam_x + ext; x < wx - cam_x + ext + 8; x++) {
-            if (x < 0 || x >= width)
+            if (x < 0 || x >= width || !(mask & 0x80 >> ((x - ext + cam_x) & 7)))
               continue;
             uint32 l = row[x] >> 24;
             // solo il fondale del layer giusto: HUD (2) e personaggi (4, 6) restano

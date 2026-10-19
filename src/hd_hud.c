@@ -483,11 +483,12 @@ void HdHud_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
 
   // --- Tasti: il punto piu' alto a filo con i cuori, il piu' a destra con
   // lo stesso margine dei cuori a sinistra
-  // Con gli oggetti su X, L e R (ItemSwitchLR) i tasti sono quattro, a rombo,
-  // e a sinistra ci sono i dorsali L e R (immagine posizione tasti.png)
+  // Solo i tre tasti Y, A e B; con "Oggetti X, L, R nell'HUD"
+  // (ShowXLRItemsInHud) i tasti sono quattro, a rombo con X blu, e a sinistra
+  // ci sono i dorsali L e R
   const int S = HD_BUTTON_SIZE;
   int yx, yy, ax, ay, bx, by;
-  if (enhanced_features0 & kFeatures0_SwitchLR) {
+  if (enhanced_features0 & kFeatures0_ShowXLRItemsInHud) {
     int gx = W - margin - HD_BUTTONS4_W, gy = top;
     DrawImage(&cv, gx, gy, kHdButtons4, HD_BUTTONS4_W, HD_BUTTONS4_H);
     yx = gx + HD_BUTTON4_Y_X, yy = gy + HD_BUTTON4_Y_Y;
