@@ -2501,6 +2501,36 @@ fail:
   }
 }
 
+// La fiamma della Lanterna ("Spada e oggetti interazione ambiente") ferisce i
+// nemici che tocca come la spada di livello 1 (classe di danno 1: un soldato
+// blu muore al terzo colpo) e li spinge indietro; nel riquadro della fiamma,
+// davanti a Link (AncillaAdd_LampFlame)
+static void LampFlame_DamageSprites(void) {
+  static const int8 kLampFlame_X[4] = {0, 0, -20, 18};
+  static const int8 kLampFlame_Y[4] = {-16, 24, 4, 4};
+  if (!(enhanced_features0 & kFeatures0_SwordAndItems))
+    return;
+  int d = link_direction_facing >> 1;
+  uint16 x = link_x_coord + kLampFlame_X[d], y = link_y_coord + kLampFlame_Y[d];
+  for (int j = 15; j >= 0; j--) {
+    if (sprite_state[j] < 9 || sprite_ignore_projectile[j] || sprite_pause[j] || sprite_hit_timer[j] ||
+        sprite_floor[j] != link_is_on_lower_level)
+      continue;
+    SpriteHitBox hb;
+    hb.r0_xlo = x, hb.r8_xhi = x >> 8;
+    hb.r1_ylo = y, hb.r9_yhi = y >> 8;
+    hb.r2 = hb.r3 = 16;
+    Sprite_SetupHitBox(j, &hb);
+    if (!CheckIfHitBoxesOverlap(&hb))
+      continue;
+    ProjectSpeedRet pt = Sprite_ProjectSpeedTowardsLink(j, 0x40);
+    sprite_x_recoil[j] = -pt.x;
+    sprite_y_recoil[j] = -pt.y;
+    damage_type_determiner = 1;
+    Sprite_ApplyCalculatedDamage(j, 0x9d);
+  }
+}
+
 void LinkItem_Lamp() {  // 87a24d
   if (is_standing_in_doorway || !CheckYButtonPress())
     return;
@@ -2508,6 +2538,7 @@ void LinkItem_Lamp() {  // 87a24d
     AncillaAdd_MagicPowder(0x1a, 0);
     Dungeon_LightTorch();
     AncillaAdd_LampFlame(0x2f, 2);
+    LampFlame_DamageSprites();
     // incendia il cespuglio o l'erba davanti a Link (una sola tile: poi il
     // fuoco passa da solo a quelle vicine)
     if (!player_is_indoors) {

@@ -9616,6 +9616,8 @@ void Sprite_EC_ThrownItem(int k) {  // 86aae0
       int j = sprite_C[k];
       oam->charnum = kThrowableScenery_Char[j + ((t >= 2) ? 6 : 0)];
       oam->flags = (oam->flags & 0xf0) | kThrowableScenery_Flags[j];
+      if (sprite_unk5[k] && j >= 2 && j <= 4)
+        oam->flags = (oam->flags & 0xf1) | 4;  // congelato (hd_burn.c): blu
       sprite_oam_flags[k] = (sprite_oam_flags[k] & 0xc0) | (oam->flags & 0xf);
     }
   }

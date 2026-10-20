@@ -2087,6 +2087,17 @@ void Ancilla0A_ArrowInTheWall(int k) {  // 88a45b
   Arrow_Draw(k);
 }
 
+// Il colpo della Bacchetta del Ghiaccio congela i cespugli e l'erba alta che
+// incontra in linea retta, nei punti in cui controlla i muri
+static void IceRodShot_FreezeAhead(int k) {
+  static const int8 kProbe8_X[4] = {4, 4, 4, 12}, kProbe8_Y[4] = {4, 12, 5, 5};
+  static const int8 kProbe12_X[4] = {12, 12, 4, 12}, kProbe12_Y[4] = {4, 12, 12, 12};
+  int d = ancilla_dir[k] & 3;
+  uint16 x = Ancilla_GetX(k), y = Ancilla_GetY(k);
+  HdBurn_Freeze(x + kProbe8_X[d], y + kProbe8_Y[d]);
+  HdBurn_Freeze(x + kProbe12_X[d], y + kProbe12_Y[d]);
+}
+
 void Ancilla0B_IceRodShot(int k) {  // 88a4dd
   if (submodule_index == 0) {
     if (sign8(--ancilla_aux_timer[k])) {
@@ -2102,6 +2113,7 @@ void Ancilla0B_IceRodShot(int k) {  // 88a4dd
         return;
       Ancilla_MoveY(k);
       Ancilla_MoveX(k);
+      IceRodShot_FreezeAhead(k);
       if (Ancilla_CheckSpriteCollision(k) >= 0 || Ancilla_CheckTileCollision(k)) {
         ancilla_type[k] = 0x11;
         ancilla_numspr[k] = kAncilla_Pflags[0x11];
@@ -2516,6 +2528,9 @@ void EtherSpell_HandleRadialSpin(int k) {  // 88abef
     }
   }
   ancilla_type[k] = 0;
+  // fine dell'animazione: i nemici si congelano e con loro cespugli ed erba
+  // che si vedono
+  HdBurn_FreezeScreen();
   load_chr_halfslot_even_odd = 1;
   byte_7E0324 = 0;
   state_for_spin_attack = 0;
@@ -2825,6 +2840,9 @@ void BombosSpell_ControlBlasting(int kk) {  // 88b40d
     }
   }
   ancilla_type[kk] = 0;
+  // fine dell'animazione: i nemici prendono fuoco e con loro cespugli ed
+  // erba che si vedono
+  HdBurn_IgniteScreen();
   load_chr_halfslot_even_odd = 1;
   byte_7E0324 = 0;
   state_for_spin_attack = 0;

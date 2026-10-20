@@ -273,12 +273,15 @@ static void CollectLights(int mod, bool dark, int frame_w, int bias_x, int bias_
   if (mod == 9) {
     const HdBurnTile *tiles;
     int n = HdBurn_GetBurning(&tiles);
-    for (int i = 0; i < n; i++) {
+    // con il Medaglione della Fiamma le tile sono centinaia: una luce ogni
+    // tanto basta
+    int stride = n > 48 ? (n + 47) / 48 : 1;
+    for (int i = 0; i < n; i += stride) {
       float age = tiles[i].age;
       float inten = (age < 10 ? age / 10.0f : 1.0f) * (age > kHdBurnTime - 20 ? (kHdBurnTime - age) / 20.0f : 1.0f);
       float x = tiles[i].x + 8 - cam_x + ext, y = tiles[i].y + 4 - cam_y;
       float flicker = 1.0f + 0.10f * sinf(t * 2.3f + tiles[i].seed);
-      AddFireLight(x, y, 34 * inten * flicker, 0.40f * inten, 0.22f * inten, 0.06f * inten, 0.7f * inten);
+      AddFireLight(x, y, 34 * sqrtf((float)stride) * inten * flicker, 0.40f * inten, 0.22f * inten, 0.06f * inten, 0.7f * inten);
     }
   }
 }

@@ -1319,6 +1319,11 @@ static bool ppu_evaluateSprites(Ppu* ppu, int line) {
     int prio = SPRITE_PRIO_TO_PRIO(ppu->objOnTop ? 3 : (oam1 & 0x3000) >> 12, (oam1 & 0x800) == 0);
     PpuZbufType z = paletteBase + (prio << 8);
     uint8 cast = ppu->objCastShadow[(index >> 1) & 127];
+    const uint8 *ice = NULL;
+    if (ppu->objIce[(index >> 1) & 127]) {
+      ice = ppu->iceRemap;
+      z = 0x80 + 16 * 2 + (prio << 8);
+    }
     
     for (int col = 0; col < spriteSize; col += 8) {
       if (col + x > -8 - extra_left_right && col + x < 256 + extra_left_right) {
@@ -1342,7 +1347,7 @@ static bool ppu_evaluateSprites(Ppu* ppu, int line) {
           int pixel = (bits >> 0) & 1 | (bits >> 7) & 2 | (bits >> 14) & 4 | (bits >> 21) & 8;
           // draw it in the buffer if there is a pixel here, and the buffer there is still empty
           if (pixel != 0 && (dst[0] & 0xff) == 0) {
-            dst[0] = z + pixel;
+            dst[0] = z + (ice ? ice[pixel] : pixel);
             ppu->objShadowLine[dst - ppu->objBuffer.data] = cast;
           }
         }

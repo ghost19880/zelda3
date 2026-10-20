@@ -84,6 +84,7 @@ static const FeatureOption kFeatureOptions[] = {
   { "Nomi dei dungeon", "DungeonNames", kFeatures0_DungeonNames },
   { "Cambio oggetti con L e R", "ItemSwitchLR", kFeatures0_SwitchLR },
   { "Spada e oggetti interazione ambiente", "SwordAndItemsInteraction", kFeatures0_SwordAndItems },
+  { "Interazione bruciatura e congelamento", "BurnAndFreezeInteraction", kFeatures0_BurnAndFreeze },
   { "Sterza durante lo scatto", "TurnWhileDashing", kFeatures0_TurnWhileDashing },
   { "Fino a 4 bombe insieme", "MoreActiveBombs", kFeatures0_MoreActiveBombs },
   { "Massimi in giallo nell'HUD", "ShowMaxItemsInYellow", kFeatures0_ShowMaxItemsInYellow },
@@ -245,6 +246,7 @@ static const char *ShortLabel(const char *s) {
   static const char *const kShort[][2] = {
     { "Specchio verso il Mondo delle Tenebre", "Specchio verso M. delle Tenebre" },
     { "Spada e oggetti interazione ambiente", "Spada e oggetti: ambiente" },
+    { "Interazione bruciatura e congelamento", "Bruciatura e congelamento" },
   };
   for (int i = 0; i < countof(kShort); i++)
     if (strcmp(s, kShort[i][0]) == 0)
@@ -442,6 +444,7 @@ static const char *Tr(const char *it) {
     { "Nomi dei dungeon", "Dungeon names" },
     { "Cambio oggetti con L e R", "Switch items with L and R" },
     { "Spada e oggetti interazione ambiente", "Sword and items interaction" },
+    { "Interazione bruciatura e congelamento", "Burn and freeze interaction" },
     { "Sterza durante lo scatto", "Turn while dashing" },
     { "Fino a 4 bombe insieme", "Up to 4 bombs at once" },
     { "Massimi in giallo nell'HUD", "Maximums in yellow in the HUD" },

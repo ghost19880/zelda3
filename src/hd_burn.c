@@ -1,12 +1,20 @@
-// Incendio di cespugli ed erba nel mondo esterno: la Lanterna e la Bacchetta del
-// Fuoco danno fuoco a cespugli ed erba alti. Ogni tile resta in fiamme per circa
-// un secondo e intanto il fuoco passa, con un po' di ritardo casuale, a quelle
-// vicine (anche in diagonale), cosi' un prato brucia in qualche secondo come in
-// Four Swords Adventures. Quando si spegne il cespuglio si comporta come quello
-// tagliato: sparisce, lascia i suoi resti e scopre cio' che nascondeva; il
-// terreno resta annerito anche lasciando l'area e tornandoci, finche' il gioco
-// non fa ricrescere il cespuglio. Le fiamme, il fumo e l'annerimento sono
-// disegnati da hd_fx.c. Le fiamme feriscono Link e i nemici che le toccano.
+// Fuoco e ghiaccio su cespugli ed erba nel mondo esterno ("Interazione
+// bruciatura e congelamento").
+// Fuoco: la Lanterna e la Bacchetta del Fuoco danno fuoco a cespugli ed erba
+// alti. Ogni tile resta in fiamme per circa un secondo e intanto il fuoco
+// passa, con un po' di ritardo casuale, a quelle vicine (anche in diagonale),
+// cosi' un prato brucia in qualche secondo come in Four Swords Adventures. Il
+// Medaglione della Fiamma brucia insieme tutto quello che si vede, senza
+// propagarsi. Quando si spegne il cespuglio si comporta come quello tagliato:
+// sparisce, lascia i suoi resti e scopre cio' che nascondeva; il terreno resta
+// annerito anche lasciando l'area e tornandoci, finche' il gioco non fa
+// ricrescere il cespuglio. Le fiamme feriscono Link e i nemici che le toccano.
+// Ghiaccio: la Bacchetta del Ghiaccio congela i cespugli e l'erba sulla sua
+// linea, il Medaglione dell'Etere tutti quelli che si vedono; il ghiaccio non
+// si propaga. Il cespuglio congelato resta finche' non viene tagliato o
+// sollevato: allora va in pezzi come un vaso, in blu. Il fuoco scioglie il
+// ghiaccio (la tile non brucia) e il ghiaccio spegne il fuoco.
+// Fiamme, fumo, annerimento e ghiaccio sono disegnati da hd_fx.c.
 #include <stdlib.h>
 #include <string.h>
 #include "hd_burn.h"
@@ -18,11 +26,14 @@
 #include "misc.h"
 #include "ancilla.h"
 #include "hd_fx.h"
+#include "snes/ppu.h"
+
+extern int g_render_bias_x, g_render_bias_y;
 
 enum {
   kMaxPending = 128,
-  kMaxBurning = 96,
   kMaxScorched = 2048,   // tile annerite ricordate (8 byte l'una)
+  kMaxFrozen = 1024,     // tile congelate ricordate
   kSpreadAt = 20,        // frame in fiamme prima di passare il fuoco ai vicini...
   kSpreadAtRand = 14,    // ...piu' fino a questi, a caso
   kDelaySide = 2,        // ritardo per i vicini di lato (piu' fino a kDelayRand)
@@ -45,11 +56,13 @@ typedef struct Pending {
 
 static Pending g_pending[kMaxPending];
 static int g_num_pending;
-static HdBurnTile g_burning[kMaxBurning];
-static uint8 g_spread_at[kMaxBurning];  // 0xff: non passa il fuoco ai vicini
+static HdBurnTile g_burning[kHdMaxBurning];
+static uint8 g_spread_at[kHdMaxBurning];  // 0xff: non passa il fuoco ai vicini
 static int g_num_burning;
 static HdBurnTile g_scorched[kMaxScorched];
 static int g_num_scorched;
+static HdBurnTile g_frozen[kMaxFrozen];
+static int g_num_frozen;
 static uint16 g_burn_area = 0xffff;
 static uint8 g_sfx_timer;
 static uint32 g_burn_rng = 0x2545f491;
@@ -58,6 +71,10 @@ static uint32 g_burn_rng = 0x2545f491;
 static int Rand(int n) {
   g_burn_rng = g_burn_rng * 1664525 + 1013904223;
   return (g_burn_rng >> 16) % n;
+}
+
+static bool Enabled(void) {
+  return !player_is_indoors && (enhanced_features0 & kFeatures0_BurnAndFreeze);
 }
 
 // Cespuglio o erba alta: mappa16 che resta dopo e tipo dei resti
@@ -94,15 +111,26 @@ static void ClearAll(void) {
   g_num_pending = g_num_burning = 0;
 }
 
-static bool IsBurning(uint16 x, uint16 y) {
+static int FindBurning(uint16 x, uint16 y) {
   for (int i = 0; i < g_num_burning; i++)
     if (g_burning[i].x == x && g_burning[i].y == y)
-      return true;
-  return false;
+      return i;
+  return -1;
+}
+
+static int FindFrozen(uint16 x, uint16 y) {
+  for (int i = 0; i < g_num_frozen; i++)
+    if (g_frozen[i].x == x && g_frozen[i].y == y && g_frozen[i].area == (uint8)overworld_area_index)
+      return i;
+  return -1;
+}
+
+static void RemoveFrozen(int i) {
+  g_frozen[i] = g_frozen[--g_num_frozen];
 }
 
 static void Queue(uint16 x, uint16 y, uint8 timer) {
-  if (IsBurning(x, y))
+  if (FindBurning(x, y) >= 0)
     return;
   for (int i = 0; i < g_num_pending; i++)
     if (g_pending[i].x == x && g_pending[i].y == y)
@@ -111,10 +139,16 @@ static void Queue(uint16 x, uint16 y, uint8 timer) {
     g_pending[g_num_pending++] = (Pending){ x, y, timer };
 }
 
-// La tile (gia' allineata a 16) prende fuoco
+// La tile (gia' allineata a 16) prende fuoco; se e' congelata il ghiaccio si
+// scioglie e la tile non brucia
 static bool StartBurning(uint16 x, uint16 y, bool spread) {
-  if (!IsBurnable(x, y) || IsBurning(x, y) || g_num_burning >= kMaxBurning)
+  if (!IsBurnable(x, y) || FindBurning(x, y) >= 0 || g_num_burning >= kHdMaxBurning)
     return false;
+  int f = FindFrozen(x, y);
+  if (f >= 0) {
+    RemoveFrozen(f);
+    return false;
+  }
   if (g_burn_area != overworld_area_index) {
     g_burn_area = overworld_area_index;
     ClearAll();
@@ -204,16 +238,100 @@ static void BurnOut(uint16 x, uint16 y) {
   g_scorched[g_num_scorched++] = (HdBurnTile){ x, y, 0, (uint8)Rand(256), (uint8)overworld_area_index };
 }
 
+// La tile (gia' allineata a 16) si congela; se bruciava il fuoco si spegne
+static bool StartFreezing(uint16 x, uint16 y) {
+  if (!IsBurnable(x, y) || FindFrozen(x, y) >= 0)
+    return false;
+  int b = FindBurning(x, y);
+  if (b >= 0) {
+    g_num_burning--;
+    g_burning[b] = g_burning[g_num_burning];
+    g_spread_at[b] = g_spread_at[g_num_burning];
+  }
+  for (int i = 0; i < g_num_pending; i++) {
+    if (g_pending[i].x == x && g_pending[i].y == y) {
+      g_pending[i] = g_pending[--g_num_pending];
+      break;
+    }
+  }
+  if (g_num_frozen == kMaxFrozen)
+    memmove(g_frozen, g_frozen + 1, --g_num_frozen * sizeof(g_frozen[0]));
+  g_frozen[g_num_frozen++] = (HdBurnTile){ x, y, 0, (uint8)Rand(256), (uint8)overworld_area_index };
+  return true;
+}
+
+// Riquadro del mondo che si vede sullo schermo, tile 16x16 comprese
+static void VisibleTiles(uint16 *x0, uint16 *y0, int *w, int *h) {
+  Ppu *ppu = g_zenv.ppu;
+  int ext = ppu->extraLeftRight;
+  int rows = (ppu->renderFlags & kPpuRenderFlags_Height240) ? 240 : 224;
+  *x0 = (BG2HOFS_copy2 + g_render_bias_x - ext) & ~0xf;
+  *y0 = (BG2VOFS_copy2 + g_render_bias_y) & ~0xf;
+  *w = 256 + 2 * ext + 16, *h = rows + 16;
+}
+
 bool HdBurn_Ignite(uint16 x, uint16 y, bool spread) {
   // sotto la pioggia il fuoco non attecchisce
-  if (player_is_indoors || !(enhanced_features0 & kFeatures0_SwordAndItems) || HdFx_IsRainingOutdoors())
+  if (!Enabled() || HdFx_IsRainingOutdoors())
     return false;
   return StartBurning(x & ~0xf, y & ~0xf, spread);
+}
+
+bool HdBurn_Freeze(uint16 x, uint16 y) {
+  if (!Enabled())
+    return false;
+  return StartFreezing(x & ~0xf, y & ~0xf);
+}
+
+void HdBurn_IgniteScreen(void) {
+  if (!Enabled() || HdFx_IsRainingOutdoors())
+    return;
+  uint16 x0, y0;
+  int w, h;
+  VisibleTiles(&x0, &y0, &w, &h);
+  for (int y = 0; y < h; y += 16)
+    for (int x = 0; x < w; x += 16)
+      StartBurning(x0 + x, y0 + y, false);
+}
+
+void HdBurn_FreezeScreen(void) {
+  if (!Enabled())
+    return;
+  uint16 x0, y0;
+  int w, h;
+  VisibleTiles(&x0, &y0, &w, &h);
+  for (int y = 0; y < h; y += 16)
+    for (int x = 0; x < w; x += 16)
+      StartFreezing(x0 + x, y0 + y);
+}
+
+// Il cespuglio o l'erba appena tagliati o sollevati nel punto (x, y) (angolo
+// dei resti) erano congelati? Se si' li dimentica: vanno in pezzi di ghiaccio
+bool HdBurn_TakeFrozen(uint16 x, uint16 y) {
+  if (player_is_indoors)
+    return false;
+  for (int t = 0; t < 2; t++) {
+    uint16 tx = (x + t * 8) & ~0xf, ty = (y + t * 8) & ~0xf;
+    int i = FindFrozen(tx, ty);
+    if (i >= 0 && !IsBurnable(tx, ty)) {
+      RemoveFrozen(i);
+      return true;
+    }
+  }
+  return false;
+}
+
+bool HdBurn_IsFrozenAt(uint16 x, uint16 y) {
+  if (player_is_indoors || g_num_frozen == 0)
+    return false;
+  x &= ~0xf, y &= ~0xf;
+  return FindFrozen(x, y) >= 0 && IsBurnable(x, y);
 }
 
 void HdBurn_Reset(void) {
   ClearAll();
   g_num_scorched = 0;
+  g_num_frozen = 0;
 }
 
 void HdBurn_Update(void) {
@@ -238,6 +356,19 @@ void HdBurn_Update(void) {
     g_scorched[n++] = s;
   }
   g_num_scorched = n;
+  // Ghiaccio dell'area: sparisce se il cespuglio non c'e' piu'
+  n = 0;
+  for (int i = 0; i < g_num_frozen; i++) {
+    HdBurnTile s = g_frozen[i];
+    if (s.area == (uint8)overworld_area_index) {
+      if (!IsBurnable(s.x, s.y))
+        continue;
+      if (s.age < 0xffff)
+        s.age++;
+    }
+    g_frozen[n++] = s;
+  }
+  g_num_frozen = n;
   if (g_num_pending + g_num_burning == 0)
     return;
   // Il fuoco resta nell'area in cui e' nato
@@ -268,9 +399,8 @@ void HdBurn_Update(void) {
   // Tile in fiamme: passano il fuoco ai vicini, poi si spengono
   n = 0;
   int num_out = 0;
-  HdBurnTile out[kMaxBurning];
+  static HdBurnTile out[kHdMaxBurning], spread[kHdMaxBurning];
   int num_spread = 0;
-  HdBurnTile spread[kMaxBurning];
   for (int i = 0; i < g_num_burning; i++) {
     HdBurnTile b = g_burning[i];
     uint8 spread_at = g_spread_at[i];
@@ -305,4 +435,9 @@ int HdBurn_GetBurning(const HdBurnTile **tiles) {
 int HdBurn_GetScorched(const HdBurnTile **tiles) {
   *tiles = g_scorched;
   return player_is_indoors ? 0 : g_num_scorched;
+}
+
+int HdBurn_GetFrozen(const HdBurnTile **tiles) {
+  *tiles = g_frozen;
+  return player_is_indoors ? 0 : g_num_frozen;
 }

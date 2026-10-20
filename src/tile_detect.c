@@ -3,6 +3,7 @@
 #include "ancilla.h"
 #include "variables.h"
 #include "overworld.h"
+#include "hd_burn.h"
 
 static const uint8 kDetectTiles_tab0[] = { 8, 24, 0, 15 };
 static const uint8 kDetectTiles_tab1[] = { 0, 0, 8, 8 };
@@ -259,6 +260,10 @@ void TileDetection_Execute(uint16 x, uint16 y, uint16 bits) {  // 87d9d8
     link_tile_below = tile;
   } else {
     tile = Overworld_GetTileAttributeAtLocation(x, y);
+    // erba alta congelata (hd_burn.c): Link ci scivola sopra come sul
+    // pavimento del Palazzo del Ghiaccio, senza l'erba attorno ai piedi
+    if (tile == 0x40 && HdBurn_IsFrozenAt(x << 3, y))
+      tile = 0x0f;
   }
   TileDetect_ExecuteInner(tile, offs, bits, player_is_indoors);
 }

@@ -1,6 +1,7 @@
 #include "hd_world.h"
 #include "hd_hud.h"
 #include "hd_menu.h"
+#include "hd_burn.h"
 #include "sprite.h"
 #include "dungeon.h"
 #include "hud.h"
@@ -1057,6 +1058,11 @@ int Sprite_SpawnThrowableTerrain_silently(uint8 what, uint16 x, uint16 y) {  // 
       sprite_oam_flags[k] = 0x80, flags = 0x50;  // wtf
   }
   sprite_oam_flags[k] = flags;
+  // Cespuglio o erba congelati (hd_burn.c): blu come i nemici congelati
+  // (palette 2 degli sprite, Sprite_DrawMultiple) e in pezzi come un vaso
+  sprite_unk5[k] = what >= 2 && what <= 4 && HdBurn_TakeFrozen(x, y);
+  if (sprite_unk5[k])
+    sprite_oam_flags[k] = flags & 0xf1 | 4;
   sprite_unk4[k] = 9;
   flag_is_sprite_to_pick_up = 2;
   byte_7E0FB2 = 2;
@@ -1769,6 +1775,9 @@ void ThrowableScenery_TransmuteToDebris(int k) {  // 86e239
     Sprite_SpawnSecret(k);
     BYTE(dung_secrets_unk1) = 0;
   }
+  // il cespuglio o l'erba congelati vanno in pezzi come un vaso (in blu)
+  if (sprite_unk5[k] && sprite_C[k] >= 2 && sprite_C[k] <= 4)
+    sprite_C[k] = 1;
   a = player_is_indoors ? 0 : sprite_C[k];
   sound_effect_1 = 0;
   SpriteSfx_QueueSfx2WithPan(k, kSprite_Func21_Sfx[a]);
