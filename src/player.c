@@ -354,7 +354,7 @@ bool Link_HandleBunnyTransformation() {  // 8782da
     Link_ResetProperties_A();
     link_state_bits = bak;
 
-    for (int i = 4; i >= 0; i--) {
+    for (int i = kAncilla_LinkSlots - 1; i >= 0; i--) {
       if (ancilla_type[i] == 0x30 || ancilla_type[i] == 0x31)
         ancilla_type[i] = 0;
     }
@@ -620,13 +620,13 @@ void LinkState_ReadingDesertTablet() {  // 87867b
 
 void HandleSomariaAndGraves() {  // 878689
   if (!player_is_indoors && link_something_with_hookshot) {
-    int i = 4;
+    int i = kAncilla_LinkSlots - 1;
     do {
       if (ancilla_type[i] == 0x24)
         Gravestone_Move(i);
     } while (--i >= 0);
   }
-  int i = 4;
+  int i = kAncilla_LinkSlots - 1;
   do {
     if (ancilla_type[i] == 0x2C) {
       SomariaBlock_HandlePlayerInteraction(i);
@@ -1311,7 +1311,7 @@ void LinkState_ExitingDash() {  // 87915e
 
 void Link_CancelDash() {  // 879195
   if (link_is_running) {
-    int i = 4;
+    int i = kAncilla_LinkSlots - 1;
     do {
       if (ancilla_type[i] == 0x1e)
         ancilla_type[i] = 0;
@@ -2140,7 +2140,7 @@ void HandleSwordSfxAndBeam() {  // 879c66
 
   uint8 health = link_health_capacity - 4;
   if (health < link_health_current && ((link_sword_type + 1) & 0xfe) && link_sword_type >= 2) {
-    int i = 4;
+    int i = kAncilla_LinkSlots - 1;
     while (ancilla_type[i] != 0x31) {
       if (--i < 0) {
         AddSwordBeam(0);
@@ -2229,7 +2229,7 @@ void Player_Sword_SpinAttackJerks_HoldDown() {  // 879d9f
         link_speed_setting = 12;
         if (!((uint8)(link_sword_type + 1) & ~1))
           return;
-        int i = 4;
+        int i = kAncilla_LinkSlots - 1;
         do {
           if (ancilla_type[i] == 0x30 || ancilla_type[i] == 0x31)
             return;
@@ -2442,7 +2442,7 @@ void LinkItem_Bombs() {  // 87a138
   if (is_standing_in_doorway || follower_indicator == 13 || !CheckYButtonPress())
     return;
   button_mask_b_y &= ~0x40;
-  AncillaAdd_Bomb(7, enhanced_features0 & kFeatures0_MoreActiveBombs ? 3 : 1);
+  AncillaAdd_Bomb(7, enhanced_features0 & kFeatures0_MoreActiveBombs ? 9 : 1);
   link_item_in_hand = 0;
 }
 
@@ -2683,7 +2683,7 @@ void LinkItem_Flute() {  // 87a3db
   Ancilla_Sfx2_Near(19);
   if (player_is_indoors || overworld_screen_index & 0x40 || main_module_index == 11)
     return;
-  int i = 4;
+  int i = kAncilla_LinkSlots - 1;
   do {
     if (ancilla_type[i] == 0x27)
       return;
@@ -2899,7 +2899,7 @@ void LinkState_SpinAttack() {  // 87a804
   CacheCameraPropertiesIfOutdoors();
 
   if (link_auxiliary_state) {
-    int i = 4;
+    int i = kAncilla_LinkSlots - 1;
     do {
       if (ancilla_type[i] == 0x2a || ancilla_type[i] == 0x2b)
         ancilla_type[i] = 0;
@@ -3139,7 +3139,7 @@ void LinkState_Hookshotting() {  // 87ab7c
   link_give_damage = 0;
   link_auxiliary_state = 0;
   link_incapacitated_timer = 0;
-  int i = 4;
+  int i = kAncilla_LinkSlots - 1;
   while (ancilla_type[i] != 0x1f) {
     if (--i < 0) {
       if (!sign8(--link_delay_timer_spin_attack))
@@ -3371,7 +3371,7 @@ void LinkItem_CaneOfSomaria() {  // 87aec0
   if (!(button_mask_b_y & 0x40)) {
     if (player_on_somaria_platform || is_standing_in_doorway || !CheckYButtonPress())
       return;
-    int i = 4;
+    int i = kAncilla_LinkSlots - 1;
     bool did_charge_magic = false;
 
     while (ancilla_type[i] != 0x2c) {
@@ -3460,7 +3460,7 @@ out:
 bool SearchForByrnaSpark() {  // 87afb5
   if (link_position_mode & 8)
     return false;
-  int i = 4;
+  int i = kAncilla_LinkSlots - 1;
   do {
     if (ancilla_type[i] == 0x31)
       return true;
@@ -6586,7 +6586,7 @@ void AncillaAdd_DugUpFlute(uint8 a, uint8 y) {  // 898c73
 }
 
 void AncillaAdd_CaneOfByrnaInitSpark(uint8 a, uint8 y) {  // 898ee0
-  for (int k = 4; k >= 0; k--) {
+  for (int k = kAncilla_LinkSlots - 1; k >= 0; k--) {
     if (ancilla_type[k] == 0x31)
       ancilla_type[k] = 0;
   }

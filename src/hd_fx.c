@@ -429,7 +429,7 @@ static void ApplyWindowRays(uint8 *pixels, int pitch, int width, int height, int
 // 5. Bagliore a raggi quando Link solleva un oggetto ricevuto
 
 static void ApplyItemGlow(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext) {
-  for (int k = 0; k < 10; k++) {
+  for (int k = 0; k < kAncilla_Slots; k++) {
     int type = ancilla_type[k];
     if (type != 0x22 && type != 0x29 && type != 0x35)
       continue;  // oggetto ricevuto, Amuleto/Cristallo, Spada Suprema
@@ -897,7 +897,7 @@ static void ApplyBurning(uint8 *pixels, int pitch, int width, int height, int ca
     int nramp = IceRamp(ramp);
     for (int i = 0; i < n; i++) {
       const HdBurnTile *f = &tiles[i];
-      if (f->area != (uint8)overworld_area_index)
+      if (!HdBurn_TileShown(f))
         continue;
       int sx = f->x - cam_x + ext, sy = f->y - cam_y;
       if (sx > -20 && sy > -20 && sx < width + 4 && sy < height + 4)
@@ -908,7 +908,7 @@ static void ApplyBurning(uint8 *pixels, int pitch, int width, int height, int ca
   bool live = main_module_index == 9 && submodule_index == 0;
   for (int i = 0; i < n; i++) {
     const HdBurnTile *s = &tiles[i];
-    if (s->area != (uint8)overworld_area_index)
+    if (!HdBurn_TileShown(s))
       continue;
     float k = (float)s->age / kHdScorchTime;
     int sx = s->x - cam_x + ext, sy = s->y - cam_y;

@@ -24,6 +24,7 @@
 #include "overworld.h"
 #include "sprite.h"
 #include "misc.h"
+#include "hd_world.h"
 #include "ancilla.h"
 #include "hd_fx.h"
 #include "snes/ppu.h"
@@ -64,6 +65,7 @@ static int g_num_scorched;
 static HdBurnTile g_frozen[kMaxFrozen];
 static int g_num_frozen;
 static uint16 g_burn_area = 0xffff;
+static uint16 g_seen_area = 0xffff;  // per i segreti delle tile bruciate da lontano
 static uint8 g_sfx_timer;
 static uint32 g_burn_rng = 0x2545f491;
 
@@ -99,11 +101,37 @@ static int TilePos(uint16 x, uint16 y) {
   return (dy & overworld_offset_mask_y) * 8 + ((x >> 3) - overworld_offset_base_x & overworld_offset_mask_x);
 }
 
-static bool IsBurnable(uint16 x, uint16 y) {
+// Mondo unico: il fuoco passa da un'area all'altra e non si spegne quando
+// Link cambia area
+static bool Seamless(void) {
+  return HdWorld_SeamlessOn();
+}
+
+// Mappa16 della tile, anche nelle aree vicine col mondo unico; -1 se non si sa
+static int TileAt(uint16 x, uint16 y) {
   int pos = TilePos(x, y);
+  if (pos >= 0)
+    return overworld_tileattr[pos >> 1];
+  return HdWorld_WorldTile(x, y);
+}
+
+// Area della tile (con il bit del mondo, come overworld_area_index)
+static uint8 AreaOf(uint16 x, uint16 y) {
+  int head = TilePos(x, y) < 0 ? HdWorld_AreaAt(x, y) : -1;
+  return head >= 0 ? (uint8)head : (uint8)overworld_area_index;
+}
+
+static bool IsBurnable(uint16 x, uint16 y) {
+  int t = TileAt(x, y);
   uint16 repl;
   uint8 what;
-  return pos >= 0 && Burnable(overworld_tileattr[pos >> 1], &repl, &what);
+  return t >= 0 && Burnable(t, &repl, &what);
+}
+
+bool HdBurn_TileShown(const HdBurnTile *t) {
+  if (Seamless())
+    return !((t->area ^ overworld_area_index) & 0x40);
+  return t->area == (uint8)overworld_area_index;
 }
 
 // Spegne l'incendio in corso (le tile annerite restano)
@@ -120,7 +148,7 @@ static int FindBurning(uint16 x, uint16 y) {
 
 static int FindFrozen(uint16 x, uint16 y) {
   for (int i = 0; i < g_num_frozen; i++)
-    if (g_frozen[i].x == x && g_frozen[i].y == y && g_frozen[i].area == (uint8)overworld_area_index)
+    if (g_frozen[i].x == x && g_frozen[i].y == y && g_frozen[i].area == AreaOf(x, y))
       return i;
   return -1;
 }
@@ -149,12 +177,13 @@ static bool StartBurning(uint16 x, uint16 y, bool spread) {
     RemoveFrozen(f);
     return false;
   }
-  if (g_burn_area != overworld_area_index) {
-    g_burn_area = overworld_area_index;
+  // senza mondo unico il fuoco resta nell'area in cui e' nato; col mondo
+  // unico si spegne solo passando all'altro mondo
+  if (Seamless() ? ((g_burn_area ^ overworld_area_index) & 0x40) != 0 : g_burn_area != overworld_area_index)
     ClearAll();
-  }
+  g_burn_area = overworld_area_index;
   int i = g_num_burning++;
-  g_burning[i] = (HdBurnTile){ x, y, 0, (uint8)Rand(256), (uint8)overworld_area_index };
+  g_burning[i] = (HdBurnTile){ x, y, 0, (uint8)Rand(256), AreaOf(x, y) };
   g_spread_at[i] = spread ? kSpreadAt + Rand(kSpreadAtRand) : 0xff;
   if (g_sfx_timer == 0) {
     sound_effect_1 = CalculateSfxPan(x) | 0x2a;
@@ -223,7 +252,20 @@ static void BurnOut(uint16 x, uint16 y) {
   int pos = TilePos(x, y);
   uint16 repl;
   uint8 what;
-  if (pos < 0 || !Burnable(overworld_tileattr[pos >> 1], &repl, &what))
+  if (pos < 0) {
+    // tile di un'area vicina (mondo unico): cambia nel mondo persistente; il
+    // segreto sotto il cespuglio si scopre quando Link entra nell'area
+    int t = TileAt(x, y);
+    if (t < 0 || !Burnable(t, &repl, &what) || !HdWorld_SetWorldTile(x, y, repl))
+      return;
+    BYTE(dung_secrets_unk1) = 0;
+    Sprite_SpawnImmediatelySmashedTerrain(what, x, y);
+    if (g_num_scorched == kMaxScorched)
+      memmove(g_scorched, g_scorched + 1, --g_num_scorched * sizeof(g_scorched[0]));
+    g_scorched[g_num_scorched++] = (HdBurnTile){ x, y, 0, (uint8)Rand(256), AreaOf(x, y), 1 };
+    return;
+  }
+  if (!Burnable(overworld_tileattr[pos >> 1], &repl, &what))
     return;
   uint16 secret = Overworld_RevealSecret(pos);
   if (secret != 0)
@@ -256,7 +298,7 @@ static bool StartFreezing(uint16 x, uint16 y) {
   }
   if (g_num_frozen == kMaxFrozen)
     memmove(g_frozen, g_frozen + 1, --g_num_frozen * sizeof(g_frozen[0]));
-  g_frozen[g_num_frozen++] = (HdBurnTile){ x, y, 0, (uint8)Rand(256), (uint8)overworld_area_index };
+  g_frozen[g_num_frozen++] = (HdBurnTile){ x, y, 0, (uint8)Rand(256), AreaOf(x, y) };
   return true;
 }
 
@@ -334,6 +376,29 @@ void HdBurn_Reset(void) {
   g_num_frozen = 0;
 }
 
+// Link e' entrato in un'area dove il fuoco era arrivato da un'area vicina:
+// sotto i cespugli bruciati compare quello che nascondevano (buche, scale),
+// come quando bruciano nell'area di Link
+static void RevealRemoteSecrets(void) {
+  for (int i = 0; i < g_num_scorched; i++) {
+    HdBurnTile *s = &g_scorched[i];
+    if (!s->remote || s->area != (uint8)overworld_area_index)
+      continue;
+    s->remote = 0;
+    int pos = TilePos(s->x, s->y);
+    if (pos < 0 || IsBurnable(s->x, s->y))
+      continue;
+    uint16 secret = Overworld_RevealSecret(pos);
+    BYTE(dung_secrets_unk1) = 0;
+    if (secret == 0)
+      continue;
+    overworld_tileattr[pos >> 1] = secret;
+    Overworld_Memorize_Map16_Change(pos, secret);
+    Overworld_DrawMap16(pos, secret);
+    nmi_load_bg_from_vram = 1;
+  }
+}
+
 void HdBurn_Update(void) {
   if (player_is_indoors) {
     HdBurn_Reset();
@@ -342,12 +407,17 @@ void HdBurn_Update(void) {
   // Il fuoco si ferma durante menu e transizioni
   if (main_module_index != 9 || submodule_index != 0)
     return;
+  if (g_seen_area != overworld_area_index) {
+    g_seen_area = overworld_area_index;
+    RevealRemoteSecrets();
+  }
+  bool seamless = Seamless();
   // Terreno annerito dell'area: si fa definitivo e sparisce solo se il
   // cespuglio e' ricresciuto (il gioco li fa ricrescere rientrando nell'area)
   int n = 0;
   for (int i = 0; i < g_num_scorched; i++) {
     HdBurnTile s = g_scorched[i];
-    if (s.area == (uint8)overworld_area_index) {
+    if (s.area == (uint8)overworld_area_index || seamless && HdBurn_TileShown(&s)) {
       if (IsBurnable(s.x, s.y))
         continue;
       if (s.age < kHdScorchTime)
@@ -360,7 +430,7 @@ void HdBurn_Update(void) {
   n = 0;
   for (int i = 0; i < g_num_frozen; i++) {
     HdBurnTile s = g_frozen[i];
-    if (s.area == (uint8)overworld_area_index) {
+    if (s.area == (uint8)overworld_area_index || seamless && HdBurn_TileShown(&s)) {
       if (!IsBurnable(s.x, s.y))
         continue;
       if (s.age < 0xffff)
@@ -371,8 +441,8 @@ void HdBurn_Update(void) {
   g_num_frozen = n;
   if (g_num_pending + g_num_burning == 0)
     return;
-  // Il fuoco resta nell'area in cui e' nato
-  if (g_burn_area != overworld_area_index) {
+  // Il fuoco resta nell'area in cui e' nato (col mondo unico: nel suo mondo)
+  if (seamless ? ((g_burn_area ^ overworld_area_index) & 0x40) != 0 : g_burn_area != overworld_area_index) {
     ClearAll();
     return;
   }
@@ -429,7 +499,11 @@ void HdBurn_Update(void) {
 
 int HdBurn_GetBurning(const HdBurnTile **tiles) {
   *tiles = g_burning;
-  return (player_is_indoors || g_burn_area != overworld_area_index) ? 0 : g_num_burning;
+  if (player_is_indoors)
+    return 0;
+  if (Seamless())
+    return ((g_burn_area ^ overworld_area_index) & 0x40) ? 0 : g_num_burning;
+  return g_burn_area != overworld_area_index ? 0 : g_num_burning;
 }
 
 int HdBurn_GetScorched(const HdBurnTile **tiles) {

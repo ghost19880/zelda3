@@ -38,11 +38,14 @@ typedef struct HdBurnTile {
   uint16 age;    // frame passati da quando ha preso fuoco (o da quando si e' spenta o congelata)
   uint8 seed;    // varia la forma delle fiamme da una tile all'altra
   uint8 area;    // area esterna della tile
+  uint8 remote;  // bruciata in un'area vicina: il segreto si scopre entrando nell'area
 } HdBurnTile;
-// Tile in fiamme nell'area attuale, tile gia' bruciate (annerite) e tile
-// congelate di tutte le aree: quelle da disegnare hanno area == overworld_area_index
+// Tile in fiamme, tile gia' bruciate (annerite) e tile congelate di tutte le
+// aree: quelle da disegnare sono quelle per cui HdBurn_TileShown e' vero
 int HdBurn_GetBurning(const HdBurnTile **tiles);
 int HdBurn_GetScorched(const HdBurnTile **tiles);
 int HdBurn_GetFrozen(const HdBurnTile **tiles);
+// Col mondo unico tutte le tile dello stesso mondo, altrimenti quelle dell'area
+bool HdBurn_TileShown(const HdBurnTile *t);
 
 #endif  // ZELDA3_HD_BURN_H_

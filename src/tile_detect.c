@@ -4,6 +4,15 @@
 #include "variables.h"
 #include "overworld.h"
 #include "hd_burn.h"
+#include "hd_world.h"
+
+// Casella (map16) nel punto x (a passi di 8 pixel), y: fuori dall'area
+// corrente viene dalla mappa del mondo (hd_world.c), non dalla mappa
+// dell'area che ricomincia dal lato opposto
+static uint16 Map16At(uint16 x, uint16 y, uint16 t) {
+  int w = HdWorld_WorldTile(x << 3, y);
+  return w >= 0 ? w : overworld_tileattr[t >> 1];
+}
 
 static const uint8 kDetectTiles_tab0[] = { 8, 24, 0, 15 };
 static const uint8 kDetectTiles_tab1[] = { 0, 0, 8, 8 };
@@ -16,7 +25,7 @@ uint16 Overworld_GetMap8AtLocation(uint16 x, uint16 y) {
   uint16 t;
   t = ((y - overworld_offset_base_y) & overworld_offset_mask_y) * 8;
   t |= ((x - overworld_offset_base_x) & overworld_offset_mask_x);
-  t = overworld_tileattr[t >> 1] * 4;
+  t = Map16At(x, y, t) * 4;
   t |= (y & 8) >> 2;
   t |= (x & 1);
   return GetMap16toMap8Table()[t];
@@ -27,7 +36,7 @@ uint8 Overworld_GetTileAttributeAtLocation(uint16 x, uint16 y) {  // 80882e
 
   t = ((y - overworld_offset_base_y) & overworld_offset_mask_y) * 8;
   t |= ((x - overworld_offset_base_x) & overworld_offset_mask_x);
-  t = overworld_tileattr[t >> 1] * 4;
+  t = Map16At(x, y, t) * 4;
   t |= (y & 8) >> 2;
   t |= (x & 1);
   t = GetMap16toMap8Table()[t];

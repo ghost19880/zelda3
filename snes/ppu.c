@@ -179,9 +179,13 @@ void ppu_runLine(Ppu *ppu, int line) {
       memset(ppu->objShadowLine, 0, sizeof(ppu->objShadowLine));
     ppu->lineHasSprites = !ppu->forcedBlank && ppu_evaluateSprites(ppu, line - 1);
     if (ppu->objShadowOut && line < 225 + ppu->extraBottomCur) {
+      // si unisce a quello che c'e' (chi chiama azzera il buffer): anche i
+      // nemici disegnati a parte con un'altra PPU fanno ombra (hd_world.c)
       int w = 256 + ppu->extraLeftRight * 2;
-      memcpy(ppu->objShadowOut + (line - 1) * ppu->objShadowStride,
-             ppu->objShadowLine + kPpuExtraLeftRight - ppu->extraLeftRight, w);
+      uint8_t *dst = ppu->objShadowOut + (line - 1) * ppu->objShadowStride;
+      const uint8_t *src = ppu->objShadowLine + kPpuExtraLeftRight - ppu->extraLeftRight;
+      for (int i = 0; i < w; i++)
+        dst[i] |= src[i];
     }
 
     // outside of visible range?
@@ -1279,7 +1283,9 @@ static bool ppu_evaluateSprites(Ppu* ppu, int line) {
       continue;  // this works for zelda because sprites are always 8 or 16.
     // check if the sprite is on this line and get the sprite size
     int row;
-    if (ppu->objBiasY == 0) {
+    // (anche senza spostamento, se la posizione vera e' stata ricostruita:
+    // con il mondo continuo un nemico appena sotto lo schermo ricompariva in cima)
+    if (ppu->objBiasY == 0 && !ppu->objYValid) {
       row = (line - yy) & 0xff;
     } else {
       // Con lo spostamento della telecamera (fluida o libera) la posizione non
