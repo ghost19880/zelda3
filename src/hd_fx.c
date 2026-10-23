@@ -521,12 +521,26 @@ static bool IsMountainScene(void) {
   return a < 0x80 && (sc == 0x03 || sc == 0x05 || sc == 0x07);
 }
 
-// Colore v della palette pal sulla montagna: le caselle con la palette 3
-// sono il bordo delle nuvole (tutta la casella); in quelle con la palette 7
-// l'interno delle nuvole sono solo i due rosa (colori 13 e 15), gli altri
-// colori sono ponti, pilastri e dirupi
-bool HdFx_IsCloudColor(int pal, int v) {
-  return pal == 3 || (pal == 7 && (v == 13 || v == 15));
+// Colore v della casella e (della mappa) sulla montagna: le caselle con la
+// palette 3 sono il bordo delle nuvole (tutta la casella); in quelle con la
+// palette 7 l'interno delle nuvole sono solo i due rosa (colori 13 e 15), gli
+// altri colori sono ponti, pilastri e dirupi. Nel Mondo delle Tenebre le
+// nuvole grigie sono le stesse caselle dell'interno (0x165, 0x175) con la
+// palette 4, e il loro bordo (l'ombra) sono le caselle del bordo rosa
+// (0x1c6-0x1cd) con la palette 7, tutta la casella
+static bool IsGreyCloudBorder(uint16 e) {
+  int t = e & 0x3ff;
+  return (e >> 10 & 7) == 7 && t >= 0x1c6 && t <= 0x1cd;
+}
+
+bool HdFx_IsCloudTile(uint16 e) {
+  int pal = e >> 10 & 7, t = e & 0x3ff;
+  return pal == 3 || pal == 7 || (pal == 4 && (t == 0x165 || t == 0x175));
+}
+
+bool HdFx_IsCloudColor(uint16 e, int v) {
+  int pal = e >> 10 & 7;
+  return HdFx_IsCloudTile(e) && (pal == 3 || IsGreyCloudBorder(e) || v == 13 || v == 15);
 }
 
 // Pixel di nuvola nella riga row della casella e della mappa (bit 7 = primo
@@ -535,7 +549,7 @@ static uint8 CloudRowMask(uint16 e, int row) {
   int pal = e >> 10 & 7;
   if (pal == 3)
     return 0xff;
-  if (pal != 7)
+  if (!HdFx_IsCloudTile(e))
     return 0;
   Ppu *ppu = g_zenv.ppu;
   const uint16 *t = &ppu->vram[(ppu->bgLayer[1].tileAdr + (e & 0x3ff) * 16) & 0x7fff];
@@ -546,7 +560,7 @@ static uint8 CloudRowMask(uint16 e, int row) {
     int bit = (e & 0x4000) ? col : 7 - col;
     int v = (p01 >> bit & 1) | (p01 >> (8 + bit) & 1) << 1 |
             (p23 >> bit & 1) << 2 | (p23 >> (8 + bit) & 1) << 3;
-    if (HdFx_IsCloudColor(pal, v))
+    if (HdFx_IsCloudColor(e, v))
       mask |= 0x80 >> col;
   }
   return mask;
@@ -614,7 +628,7 @@ void HdFx_MarkWater(uint8 *pixels, int pitch, int width, int height, int bias_x,
           attr = Overworld_GetTileAttributeAtLocation((uint16)wx >> 3, (uint16)wy);
           if (mountain) {
             uint16 e = Overworld_GetMap8AtLocation((uint16)wx >> 3, (uint16)wy);
-            if ((e >> 10 & 7) == 3 || (e >> 10 & 7) == 7)
+            if (HdFx_IsCloudTile(e))
               cloud_e = e;
           }
         }

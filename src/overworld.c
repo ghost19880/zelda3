@@ -804,6 +804,7 @@ void Module09_00_PlayerControl() {  // 82a53c
 }
 
 static bool InstantWorldTransition(void);
+static void ResetAncillaKeepThrown(void);
 
 // Distanza dal bordo destro (meno 0x1c) a cui scatta il cambio d'area verso
 // destra. Il gioco lascia 8 pixel prima del bordo, ma ne bastano 4 (gli altri
@@ -905,7 +906,7 @@ compare:
 after:
   HdWorld_LeaveArea();  // mondo unico: le caselle dell'area che si lascia
   y >>= 1;
-  Dungeon_ResetTorchBackgroundAndPlayerInner();
+  ResetAncillaKeepThrown();
   map16_load_src_off &= kSwitchAreaTab0[y];
   int pushed = ((current_area_of_player + kSwitchAreaTab3[y]) >> 1) & 0x3f;
   map16_load_src_off += kSwitchAreaTab1[y * 64 + pushed];
@@ -990,6 +991,45 @@ static bool g_instant_transition;
 
 static bool InstantWorldTransition(void) {
   return (enhanced_features0 & kFeatures0_ContinuousWorld) && BYTE(overworld_screen_index) < 0x80;
+}
+
+// Oggetti di Link che restano al cambio d'area col mondo unico: bombe e
+// tutto cio' che vola (con i loro colpi a segno)
+static bool IsThrownAncilla(uint8 t) {
+  switch (t) {
+  case 0x01: case 0x02: case 0x04: case 0x05: case 0x06: case 0x07:  // Somaria, fuoco, boomerang, bomba
+  case 0x09: case 0x0a: case 0x0b: case 0x0c: case 0x11: case 0x13:  // frecce, ghiaccio, raggio della spada
+  case 0x1f: case 0x2d: case 0x2e:  // rampino, blocco di Somaria che si rompe
+    return true;                    // (il blocco 0x2c sparisce, come nel gioco normale)
+  }
+  return false;
+}
+
+// Al cambio d'area il gioco toglie tutti gli oggetti di Link
+// (Ancilla_TerminateSelectInteractives). Col mondo unico le bombe e gli
+// oggetti lanciati restano dove sono e finiscono il loro volo; con il rampino
+// resta anche lo stato di Link che lo usa, con il boomerang il segno che e'
+// in volo
+static void ResetAncillaKeepThrown(void) {
+  bool keep = InstantWorldTransition(), hook = false, boom = false;
+  uint8 kept[kAncilla_LinkSlots + 1];
+  for (int i = 0; i <= kAncilla_LinkSlots; i++) {
+    kept[i] = keep && IsThrownAncilla(ancilla_type[i]) ? ancilla_type[i] : 0;
+    hook |= kept[i] == 0x1f;
+    boom |= kept[i] == 0x05;
+  }
+  uint8 state = link_player_handler_state, mask = button_mask_b_y, cant = link_cant_change_direction;
+  uint8 pos = link_position_mode, rel = related_to_hookshot, boom_flag = flag_for_boomerang_in_place;
+  Dungeon_ResetTorchBackgroundAndPlayerInner();
+  for (int i = 0; i <= kAncilla_LinkSlots; i++)
+    if (kept[i])
+      ancilla_type[i] = kept[i];
+  if (hook) {
+    link_player_handler_state = state, button_mask_b_y = mask, link_cant_change_direction = cant;
+    link_position_mode = pos, related_to_hookshot = rel;
+  }
+  if (boom)
+    flag_for_boomerang_in_place = boom_flag;
 }
 
 void Module09_LoadAuxGFX() {  // 82ab88
@@ -1631,6 +1671,13 @@ void Module09_2E_Whirlpool() {  // 82b40f
   case 12:
     countdown_for_blink = 144;
     ReloadPreviouslyLoadedSheets();
+    // Col mondo persistente i mulinelli dell'area d'arrivo possono essere gia'
+    // armati (sprite_A 0, come li ha lasciati la copia dell'area o l'ultima
+    // visita): nell'originale nascono qui con sprite_A 1 (SpritePrep_Whirlpool)
+    // e si armano solo quando Link se ne stacca. Senza, Link ripartiva subito.
+    for (int k = 0; k < 16; k++)
+      if (sprite_state[k] && sprite_type[k] == 0xba)
+        sprite_A[k] = 1;
     HDMAEN_copy = 0x80;
     sound_effect_ambient = overworld_music[BYTE(overworld_screen_index)] >> 4;
     music_control = savegame_is_darkworld ? 9 : 2;
