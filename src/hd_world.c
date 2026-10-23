@@ -467,6 +467,21 @@ bool HdWorld_ProbeMoreSlots(int k) {
 // ricomparirebbero a ogni frame. Si libera quando Link torna vicino.
 static uint8 g_revived[128][0x200];
 
+// Nemici che hanno perso Link fuori dalla loro area e aspettano di tornare a
+// casa (HdWorld_CarriedLost): restano sconfitti finche' Link e' nella loro area
+enum { kMaxHoming = 32 };
+static struct { uint8 area; uint16 blk; } g_homing[kMaxHoming];
+static int g_n_homing;
+static void ReturnHome(int a, uint16 blk);
+static void ReturnHomeWhenAway(void);
+
+static bool IsHoming(int a, uint16 blk) {
+  for (int i = 0; i < g_n_homing; i++)
+    if (g_homing[i].area == a && g_homing[i].blk == blk)
+      return true;
+  return false;
+}
+
 static bool FarFromLink(int x, int y, int lx, int ly) {
   int dx = abs(x - (lx + 8)), dy = abs(y - (ly + 12));
   return (dx > dy ? dx : dy) > kResetDistance;
@@ -508,7 +523,7 @@ static void ResetFarEnemies(int lx, int ly, const uint8 *main_ram) {
     bool active = false;
     for (int k = 0; k < 16 && !active; k++)
       active = sprite_state[k] && sprite_N_word[k] == blk;
-    if (!active && !CarriedFrom(main_ram, area, blk)) {
+    if (!active && !CarriedFrom(main_ram, area, blk) && !IsHoming(area, blk)) {
       overworld_sprite_was_loaded[blk >> 3] &= ~bit;
       revived[blk >> 3] |= bit;
     }
@@ -647,6 +662,7 @@ void HdWorld_ResetStates(void) {
   // anche i cespugli bruciati ricrescono: niente macchie all'uscita
   HdBurn_Reset();
   LiveDropAll();
+  g_n_homing = 0;  // il mondo riparte: tutti i nemici tornano a casa
   if (!g_any_state)
     return;
   memset(g_states, 0, sizeof(g_states));
@@ -1974,6 +1990,7 @@ static void TrackMain(void) {
   SaveGfx(&g_area_gfx, g_zenv.ppu);
   g_area_gfx_valid = true;
   g_last_head = BYTE(overworld_screen_index);
+  ReturnHomeWhenAway();
   ResetFarEnemies(link_x_coord, link_y_coord, g_ram);
   UpdateWorldMap();
 }
@@ -2303,7 +2320,9 @@ static void LiveDropArea(int a) {
 
 // Un nemico che seguiva Link e lo ha perso di vista (il gioco lo toglie)
 // torna alla sua area: li' non conta piu' come sconfitto e ricompare al
-// punto di partenza, invece di sparire per sempre
+// punto di partenza, invece di sparire per sempre. Ma solo quando Link non
+// e' nell'area della sua casa (ReturnHomeWhenAway): altrimenti ricomparirebbe
+// davanti a Link, che lo ha appena lasciato in un'altra area
 void HdWorld_CarriedLost(int k) {
   if (!PersistOn() || g_hd_neighbor_tick || !IsMarkedCarried(k))
     return;
@@ -2311,6 +2330,27 @@ void HdWorld_CarriedLost(int k) {
   uint16 blk = carried_blk[k];
   carried_area[k] = 0;
   g_carried[k] = false;
+  if (IsHoming(a, blk))
+    return;
+  if (g_n_homing < kMaxHoming)
+    g_homing[g_n_homing].area = a, g_homing[g_n_homing].blk = blk, g_n_homing++;
+  else
+    ReturnHome(a, blk);
+}
+
+// Ritorni a casa in attesa: si fanno quando Link e' in un'altra area
+static void ReturnHomeWhenAway(void) {
+  int cur = BYTE(overworld_screen_index) & 0x7f, j = 0;
+  for (int i = 0; i < g_n_homing; i++) {
+    if (g_homing[i].area != cur)
+      ReturnHome(g_homing[i].area, g_homing[i].blk);
+    else
+      g_homing[j++] = g_homing[i];
+  }
+  g_n_homing = j;
+}
+
+static void ReturnHome(int a, uint16 blk) {
   AreaState *st = &g_states[a];
   int j = 0;
   for (int i = 0; i < st->n_killed; i++)
