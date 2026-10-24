@@ -15,6 +15,7 @@
 #include "hd_light.h"
 #include "hd_fx.h"
 #include "hd_hud.h"
+#include "hd_menu.h"
 ZeldaEnv g_zenv;
 uint8 g_ram[131072];
 
@@ -154,6 +155,7 @@ int g_render_bias_x, g_render_bias_y;
 float g_interp_alpha = 1.0f;
 
 extern int g_render_bias_x, g_render_bias_y;
+extern int g_lamp_cone_idx;
 
 #include "hd_world.h"
 #include "hd_trans.h"
@@ -168,6 +170,12 @@ static void ConfigurePpuSideSpace() {
   // cerchio che si chiude (15) o si riapre (16): come dentro o fuori
   if (mod == 15 || mod == 16)
     mod = player_is_indoors ? 7 : 9;
+  // caduta in un labirinto (Module11): dalla fase 3 la stanza nuova e' gia' caricata
+  if (mod == 17 && subsubmodule_index >= 3)
+    mod = 7;
+  // mappa del mondo e mappa dell'Ocarina: nuvole anche oltre il bordo della mappa
+  g_zenv.ppu->m7CloudFill = main_module_index == 14 && (submodule_index == 7 || submodule_index == 10);
+  g_zenv.ppu->bg1ConeQuadrant = (mod == 7 && hdr_dungeon_dark_with_lantern && TS_copy != 0) ? g_lamp_cone_idx : -1;
   if (mod == 9) {
     if (main_module_index == 14 && submodule_index == 7 && overworld_map_state >= 4) {
       // World map
@@ -180,12 +188,11 @@ static void ConfigurePpuSideSpace() {
       extra_bottom = ow_scroll_vars0.yend - BG2VOFS_copy2;
     }
   } else if (mod == 7) {
-    // indoors, except when the light cone is in use
-    if (!(hdr_dungeon_dark_with_lantern && TS_copy != 0)) {
-      int qm = quadrant_fullsize_x >> 1;
-      extra_left = IntMax(BG2HOFS_copy2 - room_bounds_x.v[qm], 0);
-      extra_right = IntMax(room_bounds_x.v[qm + 2] - BG2HOFS_copy2, 0);
-    }
+    // indoors (anche col cono della Lanterna: la PPU tiene solo il suo
+    // quadrante di BG1, vedi PpuClipLampCone)
+    int qm = quadrant_fullsize_x >> 1;
+    extra_left = IntMax(BG2HOFS_copy2 - room_bounds_x.v[qm], 0);
+    extra_right = IntMax(room_bounds_x.v[qm + 2] - BG2HOFS_copy2, 0);
 
     int qy = quadrant_fullsize_y >> 1;
     extra_bottom = IntMax(room_bounds_y.v[qy + 2] - BG2VOFS_copy2, 0);
@@ -274,7 +281,9 @@ void ZeldaUpdateCamera() {
   // schermo tremerebbe di un pixel avanti e indietro. Mentre Link si muove la
   // telecamera avanza al massimo del suo passo e mai al contrario: a
   // velocita' costante fa i suoi stessi passi. Da fermo recupera un pixel
-  // per frame.
+  // per frame, a ritmo regolare, puntando dritto a dove deve arrivare: con il
+  // rallentamento graduale i pixel arrivavano a intervalli irregolari (1, 2, 3
+  // frame) e con i passettini di Link la vista sembrava scattare.
   {
     int tx = (int)floorf(g_cam_vx + 0.5f), ty = (int)floorf(g_cam_vy + 0.5f);
     int mx = link_x_coord - g_cam_last_x, my = link_y_coord - g_cam_last_y;
@@ -283,10 +292,13 @@ void ZeldaUpdateCamera() {
     } else {
       int dx = tx - g_cam_int_x, dy = ty - g_cam_int_y;
       if (mx) dx = (dx * mx < 0) ? 0 : (abs(dx) > abs(mx) ? mx : dx);
-      else dx = dx > 1 ? 1 : dx < -1 ? -1 : dx;
+      else dx = lx > g_cam_int_x ? 1 : lx < g_cam_int_x ? -1 : 0;
       if (my) dy = (dy * my < 0) ? 0 : (abs(dy) > abs(my) ? my : dy);
-      else dy = dy > 1 ? 1 : dy < -1 ? -1 : dy;
+      else dy = ly > g_cam_int_y ? 1 : ly < g_cam_int_y ? -1 : 0;
       g_cam_int_x += dx, g_cam_int_y += dy;
+      // da fermo la posizione fluida riparte da quella disegnata
+      if (!mx) g_cam_vx = (float)g_cam_int_x;
+      if (!my) g_cam_vy = (float)g_cam_int_y;
       // sempre entro il margine di caselle caricate
       if (g_cam_int_x < lx - kMaxDelta) g_cam_int_x = lx - kMaxDelta;
       if (g_cam_int_x > lx + kMaxDelta) g_cam_int_x = lx + kMaxDelta;
@@ -970,6 +982,8 @@ bool ZeldaRunFrame(int inputs) {
   // Avoid up/down and left/right from being pressed at the same time
   if ((inputs & 0x30) == 0x30) inputs ^= 0x30;
   if ((inputs & 0xc0) == 0xc0) inputs ^= 0xc0;
+
+  inputs = HdMenu_FilterInput(inputs);
 
   frame_ctr_dbg++;
 

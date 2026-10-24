@@ -788,9 +788,12 @@ static void SnapshotEnemies(void) {
     bool alive = false;
     for (int i = 0; i < st->n_alive && !alive; i++)
       alive = st->alive[i].blk == blk;
+    // l'oggetto lasciato dal nemico sconfitto (cuore, rupia...) prende il suo
+    // posto e il suo numero: conta solo uno sprite del tipo del nemico,
+    // altrimenti uscendo dall'area il nemico tornava subito
     bool active = alive;
     for (int k = 0; k < 16 && !active; k++)
-      active = sprite_state[k] && sprite_N_word[k] == blk;
+      active = sprite_state[k] && sprite_N_word[k] == blk && sprite_type[k] == (uint8)(t - 1);
     if (!active)
       st->killed[st->n_killed++] = blk;
   }
@@ -1131,9 +1134,10 @@ void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
   }
   int prev_module = g_prev_module;
   g_prev_module = main_module_index;
-  // fase 10: Link esce dalla porta dopo il cerchio che si apre
+  // fase 10: Link esce dalla porta dopo il cerchio che si apre; fase 9: prima
+  // si apre il portone (chiesa, castello): la vista resta su Link
   int mode = !HdWorld_Active() ? 0 : InFluteArrival() || InSoftIris() ? 1 : main_module_index != 9 ? 0 :
-             submodule_index == 0 || submodule_index == 10 || InMapReturn() ? 1 : InTransition() ? 2 :
+             submodule_index == 0 || submodule_index == 9 || submodule_index == 10 || InMapReturn() ? 1 : InTransition() ? 2 :
              InMosaicTransition() ? 3 : 0;
   int prev_mode = g_prev_mode;
   g_prev_mode = mode;

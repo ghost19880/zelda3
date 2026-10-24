@@ -2457,6 +2457,9 @@ void TileMapPrep_NotWaterOnTag() {  // 8091d3
   nmi_disable_core_updates = 1;
 }
 
+// Quadrante di BG1 (0-3) con il cono scelto dall'ultima chiamata (zelda_rtl.c)
+int g_lamp_cone_idx;
+
 void OrientLampLightCone() {  // 80f567
   static const uint16 kOrientLampBgTab0[] = { 0, 256, 0, 256 };
   static const uint16 kOrientLampBgTab1[] = { 0, 0, 256, 256 };
@@ -2482,6 +2485,7 @@ void OrientLampLightCone() {  // 80f567
         idx = a;
     }
   }
+  g_lamp_cone_idx = idx;
 
   if (idx < 2) {
     BG1HOFS_copy2 = BG2HOFS_copy2 - (link_x_coord - 0x77) + kOrientLampBgTab0[idx];
