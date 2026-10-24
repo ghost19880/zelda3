@@ -510,6 +510,19 @@ static void ApplyFairyGlow(uint8 *pixels, int pitch, int width, int height) {
     int cx = (int)g_fairy_x[i], cy = (int)g_fairy_y[i];
     float m = g_fairy_m[i];
     float rad = kRadius * m, inv_r2 = 1.0f / (rad * rad);
+    // solo se la fata si vede: nascosta (per esempio sotto la chioma di un
+    // albero, che il gioco disegna sopra gli sprite) non fa luce
+    int seen = 0;
+    for (int y = cy - 6; y <= cy + 6; y++) {
+      if (y < 0 || y >= height)
+        continue;
+      const uint32 *row = (const uint32 *)(pixels + y * pitch);
+      for (int x = cx - 6; x <= cx + 6; x++)
+        if (x >= 0 && x < width && ((row[x] >> 24) == 4 || (row[x] >> 24) == 6))
+          seen++;
+    }
+    if (seen < 12)
+      continue;
     for (int y = cy - kRadius; y <= cy + kRadius; y++) {
       if (y < 0 || y >= height)
         continue;

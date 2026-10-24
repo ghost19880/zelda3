@@ -1218,10 +1218,28 @@ static bool IsNotWalkingType(uint8 t) {
     0x54, 0x55, 0x59, 0x5b, 0x5c, 0x61, 0x6f, 0x72, 0x79, 0x7d, 0x7e, 0x7f, 0x81,
     0x82, 0x88, 0x8a, 0x8c, 0x90, 0x95, 0x96, 0x97, 0x98, 0x9a, 0xa0, 0xa2, 0xa3,
     0xa4, 0xa8, 0xa9, 0xb2, 0xb3, 0xbe, 0xc5, 0xc6, 0xc8, 0xcf, 0xe3,
+    0x14, 0x21,  // oggetti: grata della Citta' dei Ladri, leva dell'acqua
+    0xba,        // vortice che porta Link nell'acqua
   };
   for (int i = 0; i < (int)sizeof(kTypes); i++)
     if (kTypes[i] == t)
       return true;
+  return false;
+}
+
+// Nemici travestiti o nascosti: finche' sembrano un oggetto o non sono usciti
+// non fanno ombra morbida, altrimenti l'ombra li tradirebbe (restano col
+// disegno originale); la fanno solo da attivi
+static bool HiddenEnemy(int k) {
+  int ai = sprite_ai_state[k];
+  switch (sprite_type[k]) {
+  case 0x17: case 0x3e: return ai == 0;  // Hoarder sotto un cespuglio o una roccia
+  case 0xd3: return ai == 0;             // Stal, il sasso a teschio, mentre dorme
+  case 0x8f: return ai < 2;              // Zol: nascosto o mentre esce dal pavimento
+  case 0x64: return ai != 2;             // Debirando: fuori solo quando sputa fuoco
+  case 0xa1: return ai < 2;              // Freezor: statua nel muro finche' non si stacca
+  case 0x73: return sprite_E[k] == 2;    // non e' un nemico: il blocco del Santuario
+  }
   return false;
 }
 
@@ -1273,6 +1291,7 @@ void HdFx_ShadowsBeforeRender(Ppu *ppu, int width, int height) {
   for (int k = 0; k < 16; k++)
     ground[k] = (sprite_state[k] == 9 || sprite_state[k] == 11) && sprite_type[k] < 0xd8 &&
                 !IsNotWalkingType(sprite_type[k]) && sprite_z[k] == 0 &&
+                !HiddenEnemy(k) &&
                 (shadow_top[k] == (1 << 20) || shadow_top[k] <= body_bottom[k] + 2);
   for (int i = 0; i < 128; i++) {
     bool shadow = IsGameShadowTile(ppu->oam[i * 2 + 1]);
