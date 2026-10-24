@@ -9,6 +9,7 @@
 #include "snes/ppu.h"
 #include "hd_fx.h"
 #include "hd_burn.h"
+#include "hd_trans.h"
 
 bool g_dynamic_light;
 
@@ -253,7 +254,8 @@ static void CollectLights(const uint8 *pixels, int pitch, int height, int mod, b
     }
     // Link con la Lanterna (nelle stanze buie); senza Lanterna una luce minima
     if (dark) {
-      float lx = link_x_coord + 8 - cam_x + ext, ly = link_y_coord + 12 - cam_y;
+      // con le transizioni veloci Link puo' essere disegnato poco piu' in la' (hd_trans.c)
+      float lx = link_x_coord + g_trans_link_dx + 8 - cam_x + ext, ly = link_y_coord + g_trans_link_dy + 12 - cam_y;
       if (link_item_torch)
         AddLight(lx, ly, 72 * (1.0f + 0.03f * sinf(t * 1.3f)), 1.15f, 1.0f, 0.82f);
       else

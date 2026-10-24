@@ -156,6 +156,7 @@ float g_interp_alpha = 1.0f;
 extern int g_render_bias_x, g_render_bias_y;
 
 #include "hd_world.h"
+#include "hd_trans.h"
 
 static void ConfigurePpuSideSpace() {
   // Let PPU impl know about the maximum allowed extra space on the sides and bottom
@@ -242,7 +243,12 @@ void ZeldaUpdateCamera() {
   // del gioco, che si ferma ai bordi dell'area
   int lx = gx, ly = gy;
   HdWorld_UpdateCamera(&lx, &ly);
+  // Transizioni veloci: durante il passaggio la vista la decide hd_trans.c
+  int trans_x, trans_y;
+  bool trans = HdTrans_Update(g_cam_dx, g_cam_dy, &trans_x, &trans_y);
   int level = g_smooth_camera < 0 ? 0 : g_smooth_camera > 3 ? 3 : g_smooth_camera;
+  if (trans)
+    g_cam_valid = false;
   if (level == 0 || !SmoothCamera_IsGameplay() || !g_cam_valid ||
       abs(lx - (int)g_cam_vx) > 64 || abs(ly - (int)g_cam_vy) > 64) {
     g_cam_vx = (float)lx, g_cam_vy = (float)ly;
@@ -293,6 +299,8 @@ void ZeldaUpdateCamera() {
   g_cam_last_x = link_x_coord, g_cam_last_y = link_y_coord;
   g_cam_dx = g_cam_int_x - gx;
   g_cam_dy = g_cam_int_y - gy;
+  if (trans)
+    g_cam_dx += trans_x, g_cam_dy += trans_y;
   g_view_wx = g_cam_int_x, g_view_wy = g_cam_int_y;
   g_view_valid = HdWorld_Active();
   g_vis_prev_x = g_vis_cur_x, g_vis_prev_y = g_vis_cur_y;
@@ -350,7 +358,7 @@ static void ResolveSpritePositions(Ppu *ppu) {
   ppu->objYValid = ppu->objXValid = false;
   // col mondo continuo anche senza spostamento: i nemici fuori dallo schermo
   // del gioco hanno la posizione vera (SetOamHelper0 non li nasconde)
-  if (ppu->objBiasY == 0 && ppu->objBiasX == 0 && !g_view_valid)
+  if (ppu->objBiasY == 0 && ppu->objBiasX == 0 && !g_view_valid && !(g_trans_link_dx | g_trans_link_dy))
     return;
   int link_x = (int16)(link_x_coord - BG2HOFS_copy2) + 8;
   // Si confronta anche la x: un nemico fermo 256 pixel piu' in alto ma
@@ -399,6 +407,9 @@ static void ResolveSpritePositions(Ppu *ppu) {
         if (d < best)
           best = d, y = yy + c * 256;
       }
+    // transizioni veloci: Link si disegna dove cammina a velocita' costante
+    if (g_link_oam_mask[i])
+      x += g_trans_link_dx, y += g_trans_link_dy, ppu->objX[i] = (int16)x;
     ppu->objY[i] = (int16)y;
     // i pezzi di Link hanno la loro tabella; gli altri scritti con la y vera
     // 0xf0 (SetOamHelper0) non sono nascosti
