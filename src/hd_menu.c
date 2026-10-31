@@ -428,6 +428,7 @@ static const char *Tr(const char *it) {
     { "Link personalizzato", "Custom Link" },
     { "Non con un Link personalizzato", "Not with a custom Link" },
     { "Richiede lo schermo 16:9 o 16:10", "Requires a 16:9 or 16:10 screen" },
+    { "Non con meno flash", "Not with fewer flashes" },
     { "Velocit\xc3\xa0 del testo", "Text speed" },
     { "Lingua dei dialoghi", "Dialogue language" },
     { "Musica orchestrale MSU", "MSU orchestral music" },
@@ -748,6 +749,13 @@ static void Activate(int id, int dir) {
       SetFeature(kFeatures0_DimFlashes | kFeatures0_DimFlashesGba, false);
       SetFeature(bit, on);
       Palette_ApplyDimFlashFloor((g_config.features0 & kFeatures0_DimFlashes) != 0);
+      // con meno flash niente pioggia e lampi migliorati
+      if (on) {
+        g_config.fx_rain = false;
+        HdMenu_ApplyConfig();
+      }
+    } else if (id == 11 && (g_config.features0 & (kFeatures0_DimFlashes | kFeatures0_DimFlashesGba))) {
+      ShowMessage("Non con meno flash");
     } else if (id == 15 && g_zenv.ppu->extraLeftRight == 0) {
       ShowMessage("Richiede lo schermo 16:9 o 16:10");
     } else if (id >= 7 && id <= 17) {

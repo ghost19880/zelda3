@@ -675,6 +675,9 @@ static void ApplyConfigRules(void) {
   // meno flash: GBA o Virtual Console, non tutti e due
   if (g_config.features0 & kFeatures0_DimFlashesGba)
     g_config.features0 &= ~kFeatures0_DimFlashes;
+  // con meno flash niente pioggia e lampi migliorati (sono lampi anche loro)
+  if (g_config.features0 & (kFeatures0_DimFlashes | kFeatures0_DimFlashesGba))
+    g_config.fx_rain = false;
   if (!g_config.new_renderer) {
     g_config.enhanced_mode7 = false;
     g_config.extended_aspect_ratio = 0;
