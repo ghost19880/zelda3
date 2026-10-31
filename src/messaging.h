@@ -116,6 +116,9 @@ bool Text_WaitingForKey(void);
 // Testo moderno: ripete le lettere gia' scritte del messaggio
 void Text_ReplayMessage(void (*on_char)(int line, int slot, int c), void (*on_lines_up)(void));
 uint8 *Text_WritePlayerName(uint8 *p);
+// Testo moderno: strisce da 4 pixel (0-42) gia' cancellate della riga nelle
+// pagine delle fanciulle (Correzioni minori GBA)
+int Text_PageClearCols(int line);
 uint8 Text_FilterPlayerNameCharacters(uint8 a);
 void Text_Render();
 void RenderText_Draw_Border();

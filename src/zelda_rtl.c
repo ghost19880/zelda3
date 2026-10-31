@@ -17,6 +17,7 @@
 #include "hd_water.h"
 #include "hd_rumble.h"
 #include "hd_hud.h"
+#include "hud_it.h"
 #include "hd_menu.h"
 #include "hd_icegba.h"
 #include "hud.h"
@@ -304,6 +305,13 @@ static void ClearHiddenBands(Ppu *ppu, uint8 *pixels, size_t pitch, int width, i
     uint32 *row = (uint32 *)(pixels + y * pitch);
     if (y >= y1) {
       memset(row, 0, sizeof(uint32) * width);
+      continue;
+    }
+    if (ppu->hudSplitExt && y < 72) {
+      // HUD classico diviso ai lati (PpuHudSplitSrc): resta anche sul nero
+      for (int x = 0; x < width; x++)
+        if ((x < x0 || x >= x1) && (row[x] >> 24 & 0xf) != 2)
+          row[x] = 0;
       continue;
     }
     if (x0 > 0)
@@ -648,6 +656,7 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
   HdLight_BeforeRender(g_zenv.ppu);
   HdHud_BeforeRender(g_zenv.ppu);
   HdText_BeforeRender(g_zenv.ppu);
+  HudIt_BeforeRender(g_zenv.ppu);
   HdFx_IrisBeforeRender(g_zenv.ppu);
   HdFx_ShadowsBeforeRender(g_zenv.ppu, 256 + 2 * g_zenv.ppu->extraLeftRight, height);
   HdWater_BeforeRender(g_zenv.ppu, 256 + 2 * g_zenv.ppu->extraLeftRight, height);
@@ -691,6 +700,7 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
   if (g_zenv.ppu->bg3MaxDigits)
     g_zenv.ppu->cgram[0x10] = cg10;
   HdText_AfterRender(g_zenv.ppu);
+  HudIt_AfterRender(g_zenv.ppu);
   HdLight_AfterRender(g_zenv.ppu);
   HdFx_IrisAfterRender(g_zenv.ppu);
   HdFx_ShadowsAfterRender(g_zenv.ppu);

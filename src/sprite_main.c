@@ -1179,8 +1179,12 @@ void Sprite_WishPond3(int k) {
       assert(j >= 0);
       Sprite_SetX(j, info.r0_x);
       Sprite_SetY(j, info.r2_y - 80);
-      music_control = 0x1b;
-      last_music_control = 0;
+      // Correzioni minori GBA: gli accordi d'arpa ripartono solo se la musica
+      // della fata non e' gia' in corso (0x812b08c ignora la stessa canzone)
+      if (!(enhanced_features0 & kFeatures0_GbaMinorFixes) || music_unk1 != 0x1b) {
+        music_control = 0x1b;
+        last_music_control = 0;
+      }
       sprite_B[j] = 1;
       Palette_AssertTranslucencySwap();
       PaletteFilter_WishPonds();
@@ -11226,7 +11230,12 @@ void Sprite_3A_MagicBat(int k) {  // 86c044
       sprite_delay_aux1[k] = 64;
     }
     static const int8 kMadBatter_PseudoAttack_OamFlags[8] = {0xa, 4, 2, 4, 2, 0xa, 4, 2};
-    sprite_oam_flags[k] = sprite_oam_flags[k] & ~0xE | kMadBatter_PseudoAttack_OamFlags[sprite_delay_main[k] >> 1 & 7];
+    // Meno flash GBA (0x80dd9b4): i colori cambiano solo nei primi ~15
+    // fotogrammi, poi resta la palette 0xa
+    if ((enhanced_features0 & kFeatures0_DimFlashesGba) && sprite_delay_main[k] <= 0xf0)
+      sprite_oam_flags[k] = sprite_oam_flags[k] & ~0xE | 0xa;
+    else
+      sprite_oam_flags[k] = sprite_oam_flags[k] & ~0xE | kMadBatter_PseudoAttack_OamFlags[sprite_delay_main[k] >> 1 & 7];
     if (sprite_delay_main[k] == 240)
       Sprite_MagicBat_SpawnLightning(k);
     break;
@@ -11577,8 +11586,12 @@ show_later_msg:
       assert(j >= 0);
       Sprite_SetX(j, info.r0_x);
       Sprite_SetY(j, info.r2_y - 80);
-      music_control = 0x1b;
-      last_music_control = 0;
+      // Correzioni minori GBA: gli accordi d'arpa ripartono solo se la musica
+      // della fata non e' gia' in corso (0x812b08c ignora la stessa canzone)
+      if (!(enhanced_features0 & kFeatures0_GbaMinorFixes) || music_unk1 != 0x1b) {
+        music_control = 0x1b;
+        last_music_control = 0;
+      }
       sprite_B[j] = 1;
       Palette_AssertTranslucencySwap();
       PaletteFilter_WishPonds();
@@ -11696,7 +11709,19 @@ void WishPond2_Draw(int k) {  // 86c4b5
   if (f == 0xff)
     f = 5;
   sprite_oam_flags[k] = (f & 7) * 2;
+  // Correzioni minori GBA (0x80e0540): l'oggetto gettato galleggia su e giu'
+  // accanto alla fata (seno di 0x81757a0 >> 5: 8 px, 128 fotogrammi, 4 px piu' su)
+  static const uint8 kWishPondBob[64] = {
+    0, 0, 0, 1, 1, 1, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    8, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 6, 6, 6, 6, 5, 5, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 1, 1, 1, 0, 0,
+  };
+  uint16 y_bak = cur_sprite_y;
+  if (enhanced_features0 & kFeatures0_GbaMinorFixes) {
+    int bob = kWishPondBob[frame_counter & 63];
+    cur_sprite_y += (frame_counter & 0x40) ? -4 - bob : -4 + bob;
+  }
   Sprite_DrawMultiple(k, &kWishPond2_Dmd[(kReceiveItem_Tab1[g] >> 1) * 4], 4, NULL);
+  cur_sprite_y = y_bak;
 }
 
 void FaerieQueen_Draw(int k) {  // 86cb26
@@ -12285,7 +12310,8 @@ void Sprite_0D_Buzzblob(int k) {  // 86d89a
   static const uint8 kBuzzBlob_Gfx[4] = {0, 1, 0, 2};
   static const uint8 kBuzzBlob_ObjPrio[4] = {10, 2, 8, 2};
   if (sprite_delay_aux1[k])
-    sprite_obj_prio[k] = sprite_obj_prio[k] & 0xf1 | kBuzzBlob_ObjPrio[sprite_delay_aux1[k] >> 1 & 3];
+    // Meno flash GBA (0x80e6afa): colore fisso invece del lampeggio
+    sprite_obj_prio[k] = sprite_obj_prio[k] & 0xf1 | ((enhanced_features0 & kFeatures0_DimFlashesGba) ? 8 : kBuzzBlob_ObjPrio[sprite_delay_aux1[k] >> 1 & 3]);
   Sprite_Cukeman(k);
   BuzzBlob_Draw(k);
   sprite_graphics[k] = kBuzzBlob_Gfx[sprite_subtype2[k] >> 3 & 3] + (sprite_delay_aux1[k] ? 3 : 0);
@@ -20498,9 +20524,34 @@ void GenerateIceball(int k) {  // 9e94dd
   }
 }
 
+// Kholdstare appena uscito dal guscio, prima di dividersi in tre: nell'originale
+// cambia palette a ogni fotogramma per 2 secondi.
+// Meno flash GBA: resta grigio fisso, come su GBA (per chi e' fotosensibile).
+// Il GBA usa una palette apposta (sprite 8) tutta 0x5ad6 con il contorno
+// (colore 5) 0x39ce; qui si carica nella palette sprite 3, libera nella stanza.
+// (la Virtual Console non lo cambia: con Meno flash VC resta l'originale)
+enum { kKholdstareGreyPal = 3 };
+
+static void Kholdstare_GreyPalette(int k) {
+  uint16 *pal = main_palette_buffer + 0x80 + kKholdstareGreyPal * 16;
+  bool bursting = sprite_ai_state[k] == 2 && sprite_delay_main[k] != 0;
+  if (bursting && (enhanced_features0 & kFeatures0_DimFlashesGba)) {
+    if (pal[5] != 0x39ce) {
+      for (int i = 1; i < 16; i++)
+        pal[i] = (i == 5) ? 0x39ce : 0x5ad6;
+      flag_update_cgram_in_nmi++;
+    }
+    sprite_obj_prio[k] = (sprite_obj_prio[k] & ~0xe) | ((sprite_oam_flags[k] ^ kKholdstareGreyPal << 1) & 0xe);
+  } else if (pal[5] == 0x39ce && pal[1] == 0x5ad6) {
+    memcpy(pal, aux_palette_buffer + 0x80 + kKholdstareGreyPal * 16, 16 * sizeof(uint16));
+    flag_update_cgram_in_nmi++;
+  }
+}
+
 void Sprite_A2_Kholdstare(int k) {  // 9e9518
   int j;
 
+  Kholdstare_GreyPalette(k);
   Kholdstare_Draw(k);
   if (Sprite_ReturnIfInactive(k))
     return;
@@ -22646,8 +22697,8 @@ bool SpikeBlock_CheckStatueCollision(int k) {  // 9ebe19
 }
 
 void Sprite_88_Mothula(int k) {  // 9ebe7e
-  if (enhanced_features0 & kFeatures0_MiscBugFixes) {
-    // L4 sword and L3 spin slash can now damage Mothula
+  if (enhanced_features0 & kFeatures0_GbaMinorFixes) {
+    // L4 sword and L3 spin slash can now damage Mothula (Correzioni minori GBA)
     enemy_damage_data[0x884] = 1;
     enemy_damage_data[0x885] = 1;
   }
@@ -23117,7 +23168,11 @@ void YellowStalfos_DrawHead(int k, PrepOamCoordsRet *info) {  // 9ec69a
 }
 
 void SpritePrep_Eyegore(int k) {  // 9ec700
-  uint8 t = BYTE(dungeon_room_index2);
+  // Correzioni minori GBA (0x80ef010): la stanza si confronta a 16 bit, cosi'
+  // nella grotta 0x10C (sporgenza della Rocca della Tartaruga, byte basso 12)
+  // restano Eyegore veri invece dei Goriya
+  uint16 t = (enhanced_features0 & kFeatures0_GbaMinorFixes) ? dungeon_room_index2 :
+                                                               BYTE(dungeon_room_index2);
   if (t == 12 || t == 27 || t == 75 || t == 107) {
     sprite_B[k]++;
     if (sprite_type[k] == 0x83)

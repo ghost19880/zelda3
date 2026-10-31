@@ -1119,7 +1119,8 @@ void PaletteFilter_SP5F() {  // 80ec0d
 }
 
 void KholdstareShell_PaletteFiltering() {  // 80ec79
-  int t = (enhanced_features0 & kFeatures0_MiscBugFixes) ? 0x50 : 0x40;
+  // Guscio che si dissolve fino in fondo (Correzioni minori GBA)
+  int t = (enhanced_features0 & kFeatures0_GbaMinorFixes) ? 0x50 : 0x40;
   if (subsubmodule_index == 0) {
     memcpy(main_palette_buffer + t, aux_palette_buffer + t, 8 * sizeof(uint16));
     palette_filter_countdown = 0;
@@ -1946,10 +1947,11 @@ void LoadGearPalette(int dst, const uint16 *src, int n) {  // 8ed741
   memcpy(&main_palette_buffer[dst >> 1], src, sizeof(uint16) * n);
 }
 
-// Meno flash VC: i pavimenti che lampeggiano hanno colori fissi, come nelle
-// versioni Virtual Console (anche dal menu, senza riavviare)
+// Meno flash VC: i pavimenti che lampeggiano hanno colori fissi, come nella
+// Virtual Console (ROM VC 9be03c: cambia solo il byte basso dei tre colori;
+// anche dal menu, senza riavviare)
 void Palette_ApplyDimFlashFloor(bool on) {
-  static const uint16 kOrg[3] = { 0xc72, 0x109c, 0x11ff }, kVc[3] = { 0x70, 0x95, 0x57 };
+  static const uint16 kOrg[3] = { 0xc72, 0x109c, 0x11ff }, kVc[3] = { 0xc70, 0x1095, 0x1157 };
   for (int i = 0; i < 3; i++)
     kPalette_DungBgMain[0x484 + i] = on ? kVc[i] : kOrg[i];
 }
@@ -1961,8 +1963,9 @@ void Filter_Majorly_Whiten_Bg() {  // 8ed757
 }
 
 uint16 Filter_Majorly_Whiten_Color(uint16 c) {  // 8ed7fe
-  // su GBA il bianco e' pieno (+14, 0x81331b4): cambia solo il ritmo
-  int amt = (enhanced_features0 & kFeatures0_DimFlashes) ? 3 : 14;
+  // su GBA il bianco e' pieno (+14, 0x81331b4): cambia solo il ritmo;
+  // la Virtual Console somma 2 (ROM VC 8ed805/8ed818/8ed82c)
+  int amt = (enhanced_features0 & kFeatures0_DimFlashes) ? 2 : 14;
   int r = (c & 0x1f) + amt;
   int g = (c & 0x3e0) + (amt << 5);
   int b = (c & 0x7c00) + (amt << 10);

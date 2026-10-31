@@ -236,6 +236,7 @@
     <ClCompile Include="src\hd_burn.c" />
     <ClCompile Include="src\hd_icegba.c" />
     <ClCompile Include="src\hud_it.c" />
+    <ClCompile Include="src\screens_it.c" />
     <ClCompile Include="src\hd_fx.c" />
     <ClCompile Include="src\hd_water.c" />
     <ClCompile Include="src\hd_par.c" />

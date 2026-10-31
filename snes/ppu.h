@@ -67,6 +67,15 @@ struct Ppu {
   // Cifre al massimo dell'HUD (BG3, palette 5, caselle 0x90-0x99): il colore 2
   // diventa il colore cgram[0x10], che nessuno strato mostra (vedi zelda_rtl.c)
   bool bg3MaxDigits;
+  // HUD classico diviso ai lati dello schermo largo (hd_hud.c): 0 = spento,
+  // altrimenti la larghezza di ogni fascia laterale (vedi PpuHudSplitSrc)
+  uint8_t hudSplitExt;
+  // distanza dell'HUD diviso dai due bordi (quella dell'HUD moderno)
+  uint8_t hudSplitMargin;
+  // tasti con un riquadro per gli oggetti oltre a Y: 1 = X, 2 = L e R
+  uint8_t hudSplitButtons;
+  // senza HUD diviso (4:3): riquadri di X/L/R in fila sotto i contatori
+  bool hudBoxRow;
   int16_t objY[128], objX[128];
   // Ombre morbide (hd_fx.c): per ogni voce OAM se fa ombra e, per ogni pixel
   // del fotogramma (objShadowStride per riga), se lo sprite disegnato li'

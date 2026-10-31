@@ -21,6 +21,7 @@
 #include "player.h"
 #include "messaging.h"
 #include "util.h"
+#include "hud_it.h"
 
 const uint16 *Hud_GetItemIconTiles(int item);
 const uint16 *Hud_GetSwordIconTiles(void);
@@ -85,6 +86,20 @@ static int ItemMenuPush(void) {
   return d > 0 ? d : 0;
 }
 
+// L'HUD originale e' nella mappa di BG3 (caselle uguali a
+// hud_tile_indices_buffer, alla riga 2): vale ogni volta che il gioco lo
+// mostra (pozioni, cadute, vittorie, menu...), non nelle mappe e nei titoli
+static void TileFirstPixel(uint16 entry, int *row, int *col);
+
+static bool ClassicHudInVram(Ppu *ppu) {
+  int a = word_7E0219 & 0x7fff, same = 0;
+  if (ppu->mode != 1 || a != ((ppu->bgLayer[2].tilemapAdr + 0x40) & 0x7fff) || a + 165 > 0x8000)
+    return false;
+  for (int i = 0; i < 165; i++)
+    same += ppu->vram[a + i] == hud_tile_indices_buffer[i];
+  return same >= 150;
+}
+
 void HdHud_BeforeRender(Ppu *ppu) {
   bool dlg;
   bool active = ModernHudOn() && (HudContext(&dlg) || InGameMenu());
@@ -97,6 +112,17 @@ void HdHud_BeforeRender(Ppu *ppu) {
     flag_update_hud_in_nmi = 1;  // opzione appena spenta: il gioco ricarica l'HUD originale
   }
   g_hud_was_active = active;
+  // HUD classico con lo schermo largo: magia e oggetto a sinistra, il resto a
+  // destra (PpuHudSplitSrc); anche quando scende con il menu START
+  bool classic = !ModernHudOn() && ClassicHudInVram(ppu);
+  ppu->hudSplitExt = classic && ppu->extraLeftRight >= 32 ? ppu->extraLeftRight : 0;
+  // stessa distanza dai bordi dell'HUD moderno (HdHud_Draw: 8 + primo pixel del cuore)
+  int heart_row, heart_col;
+  TileFirstPixel(0x24A0, &heart_row, &heart_col);
+  ppu->hudSplitMargin = 8 + heart_col;
+  ppu->hudSplitButtons = (Hud_ItemOnX() ? 1 : 0) | (Hud_ItemOnLR() ? 2 : 0);
+  // 4:3: riquadri di X/L/R in fila sotto i contatori (PpuHudBoxRowSrc)
+  ppu->hudBoxRow = classic && !ppu->hudSplitExt && ppu->hudSplitButtons;
 }
 
 void HdHud_CanTalk(void) {
@@ -466,6 +492,12 @@ static const uint8 kTimerDigits[10][7] = {
 };
 static const uint8 kBandB[7] = { 0x1e, 0x1b, 0x1b, 0x1e, 0x1b, 0x1b, 0x1e };
 static const uint8 kBandF[7] = { 0x1f, 0x18, 0x18, 0x1e, 0x18, 0x18, 0x18 };
+// piani in italiano come sulla GBA: PT, 1oP, PS1
+static const uint8 kBandP[7] = { 0x1e, 0x1b, 0x1b, 0x1e, 0x18, 0x18, 0x18 };
+static const uint8 kBandT[7] = { 0x1f, 0x0e, 0x0e, 0x0e, 0x0e, 0x0e, 0x0e };
+static const uint8 kBandS[7] = { 0x0f, 0x18, 0x18, 0x0e, 0x03, 0x03, 0x1e };
+// o in alto (o): 4 colonne
+static const uint8 kBandOrd[7] = { 0x6, 0x9, 0x9, 0x6, 0, 0, 0 };
 // due punti e punto: 2 colonne
 static const uint8 kTimerColon[7] = { 0, 3, 3, 0, 3, 3, 0 };
 static const uint8 kTimerDot[7] = { 0, 0, 0, 0, 0, 3, 3 };
@@ -490,12 +522,17 @@ static void PxBlend(Canvas *cv, int x, int y, uint32 color, int a) {
   g_hud_bri = bri;
 }
 
-// Carattere largo 5 (cifre e lettere) o 2 (due punti e punto)
+// Carattere largo 5 (cifre e lettere), 4 (o) o 2 (due punti e punto)
 static const uint8 *BandGlyph(char c, int *w) {
   *w = 5;
   if (c >= '0' && c <= '9') return kTimerDigits[c - '0'];
   if (c == 'B') return kBandB;
   if (c == 'F') return kBandF;
+  if (c == 'P') return kBandP;
+  if (c == 'T') return kBandT;
+  if (c == 'S') return kBandS;
+  *w = 4;
+  if (c == 'o') return kBandOrd;
   *w = 2;
   return c == ':' ? kTimerColon : kTimerDot;
 }
@@ -521,7 +558,8 @@ static void TimerText(int frames, char t[9]) {
 }
 
 // Piano mostrato dopo un cambio di piano (Hud_FloorIndicator, circa 3 s):
-// piano 0 = "1F", -1 = "B1". false = niente
+// piano 0 = "1F", -1 = "B1" (in italiano "PT", 1 = "1oP", -1 = "PS1").
+// false = niente
 static bool FloorText(char t[4]) {
   if (!hud_floor_changed_timer || !player_is_indoors)
     return false;
@@ -529,6 +567,15 @@ static bool FloorText(char t[4]) {
   int n = f >= 0 ? f + 1 : -f;
   if (n > 9)
     return false;
+  if (HudIt_Active()) {
+    if (f == 0)
+      t[0] = 'P', t[1] = 'T', t[2] = 0;
+    else if (f > 0)
+      t[0] = '0' + f, t[1] = 'o', t[2] = 'P', t[3] = 0;
+    else
+      t[0] = 'P', t[1] = 'S', t[2] = '0' + n, t[3] = 0;
+    return true;
+  }
   if (f >= 0)
     t[0] = '0' + n, t[1] = 'F';
   else
@@ -549,7 +596,7 @@ static void BandPx(Canvas *cv, int x, int y, uint32 col, int a) {
 static void DrawBand(Canvas *cv, int cx, int y, const char *t) {
   int tw = 0, gw;
   for (int i = 0; t[i]; i++)
-    BandGlyph(t[i], &gw), tw += gw == 5 ? 7 : 3;
+    BandGlyph(t[i], &gw), tw += gw + (gw == 5 ? 2 : 1);
   tw--;  // niente spazio dopo l'ultimo carattere
   int w = tw + 2 * kTimerPad, h = kTimerBandH, x = cx - w / 2;
   // fascia: lati a semicerchio, interno scuro trasparente, bordo chiaro sottile
@@ -583,7 +630,6 @@ static void DrawBand(Canvas *cv, int cx, int y, const char *t) {
     int px = kTimerPad;
     for (int i = 0; t[i]; i++) {
       const uint8 *g = BandGlyph(t[i], &gw);
-      bool digit = gw == 5;
       for (int r = 0; r < kTimerH; r++)
         for (int c = 0; c < gw; c++) {
           if (!(g[r] >> (gw - 1 - c) & 1))
@@ -593,7 +639,7 @@ static void DrawBand(Canvas *cv, int cx, int y, const char *t) {
           else
             BandPx(cv, x + px + c, y + py + r, r <= 1 ? 0xffffff : 0xeef2e4, -1);
         }
-      px += gw + (digit ? 2 : 1);
+      px += gw + (gw == 5 ? 2 : 1);
     }
   }
 }
@@ -834,6 +880,15 @@ static void MtLinesUp(void) {
 #define mt_base_len ((uint8 *)(g_ram + 0x1F6C0))
 #define mt_base_x ((uint8 *)(g_ram + 0x1F700))
 
+// Riga piu' lunga dei messaggi (ricalcolata se cambia la lingua)
+static int MtMaxWidth(void) {
+  static const uint8 *width_for;
+  static int max_w;
+  if (width_for != g_zenv.dialogue_blk.ptr)
+    width_for = g_zenv.dialogue_blk.ptr, max_w = Text_MaxLineWidth(MtAdvance);
+  return max_w;
+}
+
 // Le tre righe ricostruite da cio' che il gioco ha gia' scritto (dalla RAM:
 // valgono anche dopo un salvataggio rapido o una ricarica dei testi). Le scelte
 // riscrivono il messaggio nello stesso ordine: le lettere non ricompaiono
@@ -848,6 +903,15 @@ static void MtRebuild(void) {
   }
   g_mt_written = 0;
   Text_ReplayMessage(MtChar, MtLinesUp);
+  // pagine delle fanciulle (Correzioni minori GBA): le lettere spariscono da
+  // sinistra a destra insieme alla cancellazione del testo classico (168 pixel
+  // per riga, qui larga quanto la riga piu' lunga dei messaggi)
+  for (int i = 0; i < kMtLines; i++) {
+    int cols = Text_PageClearCols(i);
+    for (int j = 0; cols && j < g_mt_len[i]; j++)
+      if (g_mt_x[i][j] * 42 < cols * MtMaxWidth())
+        g_mt_chars[i][j] = kMtSpace;
+  }
   // le lettere gia' uscite in alto con lo scorrimento non contano: dopo un
   // salvataggio rapido a meta' messaggio la comparsa parte dalla prima visibile
   int first = g_mt_written;
@@ -1049,10 +1113,7 @@ void HdText_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   // grandezza fissa per tutti i messaggi, come il riquadro originale: larga
   // quanto la riga piu' lunga del gioco (ricalcolata se cambia la lingua), alta
   // tre righe; il testo a sinistra, con le righe usate al centro in altezza
-  static const uint8 *width_for;
-  static int max_w;
-  if (width_for != g_zenv.dialogue_blk.ptr)
-    width_for = g_zenv.dialogue_blk.ptr, max_w = Text_MaxLineWidth(MtAdvance);
+  int max_w = MtMaxWidth();
   // righe con del testo: quelle vuote in cima (cartelli che cominciano dalla
   // seconda riga) non contano, cosi' il testo resta centrato come nel gioco;
   // nelle scelte le righe della domanda restano dove sono

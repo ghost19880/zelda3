@@ -397,6 +397,131 @@ static void PpuDrawBackground_4bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
 #undef DO_PIXEL_HFLIP
 }
 
+// HUD classico diviso ai lati dello schermo largo (Ppu.hudSplitExt), a
+// Ppu.hudSplitMargin pixel da tutti e due i bordi. Nella mappa di BG3 l'HUD
+// sta nelle righe 16-63: magia (x 20-35), riquadro di Y (cornice 37-58 x
+// 21-42, oggetto 40-55 x 24-39), contatori (64-159, righe 16-31), oggetti di
+// X/L/R (icone a 72 + 32 * i, righe 32-47), LIFE, cuori e piano / super
+// bomba (160-247). A sinistra magia e riquadri degli oggetti, a destra
+// contatori, LIFE, cuori e piano. Le righe arrivano a 65 per il riquadro di
+// sotto (kHudSplitBottom)
+enum { kHudSplitBottom = 66, kHudBoxStep = 24, kHudBoxRowStep = 23 };
+
+// Posto (colonna, riga) dei riquadri di Y, X, L e R per ogni combinazione
+// di Ppu.hudSplitButtons (1 = X, 2 = L e R); colonna -1 = niente riquadro
+static const int8 kHudSplitBoxes[4][4][2] = {
+  // Y        X        L        R
+  { {0, 0}, {-1, 0}, {-1, 0}, {-1, 0} },  // solo Y, come l'originale
+  { {0, 1}, { 1, 0}, {-1, 0}, {-1, 0} },  // X in alto, Y in basso a sinistra
+  { {1, 1}, {-1, 0}, { 0, 0}, { 2, 0} },  // L e R ai lati, Y in basso
+  { {1, 1}, { 1, 0}, { 0, 0}, { 2, 0} },  // L X R in alto, Y sotto X
+};
+
+// Pixel (fx, fy) del riquadro k (0 = Y, 1 = X, 2 = L, 3 = R; 22 x 22): la
+// cornice e' quella di Y, dentro l'oggetto del tasto
+static void PpuHudBoxPixel(int k, int fx, int fy, int *sx, int *sy) {
+  if (k > 0 && fx >= 3 && fx < 19 && fy >= 3 && fy < 19) {
+    *sx = 72 + 32 * (k - 1) + fx - 3, *sy = 32 + fy - 3;  // oggetto di X/L/R
+  } else {
+    *sx = 37 + fx, *sy = 21 + fy;  // cornice (e oggetto di Y)
+  }
+}
+
+// 4:3 (Ppu.hudBoxRow): HUD originale, con i riquadri di L, X e R (quelli
+// accesi, senza buchi) in fila centrati sotto i contatori (x 64-159) al posto
+// delle icone con le lettere
+static bool PpuHudBoxRowSrc(Ppu *ppu, int x, int ty, int *sx, int *sy) {
+  static const uint8 kOrder[3] = { 2, 1, 3 };  // L, X, R
+  int n = 0, ks[3];
+  for (int i = 0; i < 3; i++)
+    if (kOrder[i] == 1 ? (ppu->hudSplitButtons & 1) : (ppu->hudSplitButtons & 2))
+      ks[n++] = kOrder[i];
+  int fx = x - (112 - (kHudBoxStep * n - 2) / 2), fy = ty - 33;
+  if (fx >= 0 && fx < kHudBoxStep * n && fx % kHudBoxStep < 22 && (unsigned)fy < 22) {
+    PpuHudBoxPixel(ks[fx / kHudBoxStep], fx % kHudBoxStep, fy, sx, sy);
+    return true;
+  }
+  *sx = x, *sy = ty;
+  return x >= 0 && x < 256 && !(x >= 64 && x < 160 && ty >= 32 && ty < 48);
+}
+
+// Punto della mappa (sx, sy) da mostrare alla x dello schermo (da -ext a
+// 255 + ext) nella riga ty della mappa, o false
+static bool PpuHudSplitSrc(Ppu *ppu, int x, int ty, int *sx, int *sy) {
+  if (ppu->hudBoxRow)
+    return PpuHudBoxRowSrc(ppu, x, ty, sx, sy);
+  int ext = ppu->hudSplitExt, margin = ppu->hudSplitMargin;
+  int lx = x + ext - margin;  // 0 = primo pixel della magia
+  *sy = ty;
+  if (lx < 17) {
+    *sx = lx + 20;  // magia
+    return ty < 64 && *sx >= 0;
+  }
+  const int8 (*boxes)[2] = kHudSplitBoxes[ppu->hudSplitButtons & 3];
+  for (int k = 0; k < 4; k++) {
+    if (boxes[k][0] < 0)
+      continue;
+    int fx = lx - 17 - boxes[k][0] * kHudBoxStep, fy = ty - 21 - boxes[k][1] * kHudBoxRowStep;
+    if ((unsigned)fx >= 22 || (unsigned)fy >= 22)
+      continue;
+    PpuHudBoxPixel(k, fx, fy, sx, sy);
+    return true;
+  }
+  *sx = x - ext - 16 + margin;  // 239 = ultimo pixel dei cuori
+  if (*sx >= 64 && *sx < 248 && ty < 64)
+    return !(*sx < 160 && ty >= 32 && ty < 48);  // senza le icone di X/L/R
+  // sotto l'HUD (riga 64) la mappa resta com'e'
+  *sx = x;
+  return ty >= 64 && x >= 0 && x < 256;
+}
+
+static void PpuDrawHudSplit(Ppu *ppu, bool sub, int ty, PpuZbufType zhi, PpuZbufType zlo) {
+  int ext = ppu->hudSplitExt;
+  BgLayer *bg = &ppu->bgLayer[2];
+  PpuZbufType *dstz = ppu->bgBuffers[sub].data + kPpuExtraLeftRight;
+  for (int x = -ext; x < 256 + ext; x++) {
+    int sx, sy;
+    if (!PpuHudSplitSrc(ppu, x, ty, &sx, &sy))
+      continue;
+    uint u = sx + bg->hScroll;
+    int sc = bg->tilemapAdr + ((sy >> 3) & 0x1f) * 32 + ((u >> 3) & 0x1f);
+    if ((u & 0x100) && bg->tilemapWider)
+      sc += 0x400;
+    uint32 tile = ppu->vram[sc & 0x7fff];
+    int row = (tile & 0x8000) ? 7 - (sy & 7) : sy & 7;
+    uint32 bits = ppu->vram[bg->tileAdr + row + (tile & 0x3ff) * 8 & 0x7fff];
+    int b = (tile & 0x4000) ? (u & 7) : 7 - (u & 7);
+    int pixel = (bits >> b) & 1 | (bits >> (7 + b)) & 2;
+    PpuZbufType z = ((tile & 0x2000) ? zhi : zlo) + ((tile & 0x1c00) >> 8);
+    if (!pixel || z <= dstz[x])
+      continue;
+    dstz[x] = z + pixel;
+    // cifre al massimo (come in PpuDrawBackground_2bpp)
+    if (ppu->bg3MaxDigits && (dstz[x] & 0xff) == 0x16 && (dstz[x] >> 8 & 0xf) == 2 &&
+        (tile & 0x1c00) == 0x1400 && (uint16)((tile & 0x3ff) - 0x90) < 10)
+      dstz[x] -= 6;
+  }
+}
+
+// Dove le fasce laterali sono chiuse (stanze strette) l'HUD diviso resta
+// visibile sul nero
+static void PpuHudSplitSides(Ppu *ppu, uint32 *dst_org) {
+  int el = ppu->extraLeftRight - ppu->extraLeftCur, er = ppu->extraLeftRight - ppu->extraRightCur;
+  int w = 256 + ppu->extraLeftRight * 2;
+  for (int i = 0; i < w; i++) {
+    if (i == el)
+      i = w - er;
+    if (i >= w)
+      break;
+    uint32 z = ppu->bgBuffers[0].data[i + kPpuExtraLeftRight - ppu->extraLeftRight];
+    if ((z >> 8 & 7) != 2)
+      continue;
+    uint32 color = ppu->cgram[z & 0xff];
+    dst_org[i] = 2 << 24 | ppu->brightnessMult[color & 0x1f] << 16 |
+                 ppu->brightnessMult[(color >> 5) & 0x1f] << 8 | ppu->brightnessMult[(color >> 10) & 0x1f];
+  }
+}
+
 // Draw a whole line of a 2bpp background layer into bgBuffers
 static void PpuDrawBackground_2bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZbufType zhi, PpuZbufType zlo) {
 #define DO_PIXEL(i) do { \
@@ -422,6 +547,11 @@ static void PpuDrawBackground_2bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
   };
   int tileadr = ppu->bgLayer[layer].tileAdr, pixel;
   int tileadr1 = tileadr + 7 - (y & 0x7), tileadr0 = tileadr + (y & 0x7);
+  int ty = y & (bglayer->tilemapHigher ? 0x1ff : 0xff);
+  if (layer == 2 && (ppu->hudSplitExt || ppu->hudBoxRow) && ty >= 16 && ty < kHudSplitBottom) {
+    PpuDrawHudSplit(ppu, sub, ty, zhi, zlo);
+    return;
+  }
 
   const uint16 *addr;
   for (size_t windex = 0; windex < win.nr; windex++) {
@@ -1108,6 +1238,8 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
   if (ppu->extraLeftRight - ppu->extraRightCur != 0)
     memset(dst_org + (256 + ppu->extraLeftRight * 2 - (ppu->extraLeftRight - ppu->extraRightCur)), 0,
         sizeof(uint32) * (ppu->extraLeftRight - ppu->extraRightCur));
+  if (ppu->hudSplitExt && (ppu->extraLeftCur < ppu->extraLeftRight || ppu->extraRightCur < ppu->extraLeftRight))
+    PpuHudSplitSides(ppu, dst_org);
 }
 
 static void ppu_handlePixel(Ppu* ppu, int x, int y) {

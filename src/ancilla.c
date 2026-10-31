@@ -27,6 +27,14 @@ static bool Ancilla_LiveView(void) {
   return g_view_valid && !g_hd_neighbor_tick && HdWorld_Active();
 }
 
+// Quanto sporgono le fasce dello schermo largo (85 pixel in 16:9) per il
+// disegno delle ancille e l'uccello: anche con "unchanged_sprites" la fascia
+// si vede, quindi conta anche solo con le correzioni visive
+static int Ancilla_WideExt(void) {
+  return (enhanced_features0 & (kFeatures0_ExtendScreen64 | kFeatures0_WidescreenVisualFixes)) ?
+      g_zenv.ppu->extraLeftRight : 0;
+}
+
 // Vero se il punto del mondo (x, y) e' fuori dalla vista
 static bool Ancilla_OutsideView(uint16 x, uint16 y) {
   int ext = g_zenv.ppu->extraLeftRight;
@@ -417,7 +425,8 @@ int Ancilla_AllocHigh() {
 
 static void Ancilla_SetOam(OamEnt *oam, uint16 x, uint16 y, uint8 charnum, uint8 flags, uint8 big) {
   uint8 yval = 0xf0;
-  int xt = enhanced_features0 & kFeatures0_ExtendScreen64 ? 0x40 : 0;
+  // fasce dello schermo largo: quanto sporgono davvero (85 pixel in 16:9), non 0x40 fissi
+  int xt = Ancilla_WideExt();
   if (Ancilla_LiveView()) {
     // la posizione vera si ricostruisce al disegno (ResolveSpritePositions,
     // nella finestra da 128 pixel prima a 384 dopo la vista)
@@ -443,7 +452,7 @@ static void Ancilla_SetOam(OamEnt *oam, uint16 x, uint16 y, uint8 charnum, uint8
 static void Ancilla_SetOam_Safe(OamEnt *oam, uint16 x, uint16 y, uint8 charnum, uint8 flags, uint8 big) {
   uint8 yval = 0xf0;
   oam->x = x;
-  int xt = enhanced_features0 & kFeatures0_ExtendScreen64 ? 0x48 : 0;
+  int xt = Ancilla_WideExt() ? Ancilla_WideExt() + 8 : 0;
   if (Ancilla_LiveView()) {
     int dx = g_view_wx - BG2HOFS_copy2, dy = g_view_wy - BG2VOFS_copy2;
     if ((uint16)(x - dx + 0x80) < 0x200 && (uint16)(y - dy + 0x40) < 0x140) {
@@ -537,6 +546,13 @@ void AddDashingDustEx(uint8 a, uint8 y, uint8 flag) {
   }
 }
 
+// Quanto lo schermo largo sporge a sinistra: l'uccello parte da li' fuori.
+// In origine 0x40 fissi (16:10) e solo senza "unchanged_sprites": col 16:9
+// compariva dentro lo schermo
+static int Bird_ScreenExt(void) {
+  return Ancilla_WideExt();
+}
+
 void AddBirdCommon(int k) {
   ancilla_y_vel[k] = 0;
   ancilla_item_to_link[k] = 0;
@@ -546,8 +562,7 @@ void AddBirdCommon(int k) {
   ancilla_K[k] = 0;
   ancilla_G[k] = 0;
 
-  int xt = (enhanced_features0 & kFeatures0_ExtendScreen64) ? 0x40 : 0;
-  Ancilla_SetXY(k, BG2HOFS_copy2 - 16 - xt, link_y_coord - 8);
+  Ancilla_SetXY(k, BG2HOFS_copy2 - 16 - Bird_ScreenExt(), link_y_coord - 8);
 }
 
 ProjectSpeedRet Bomb_ProjectSpeedTowardsPlayer(int k, uint16 x, uint16 y, uint8 vel) {  // 84eb63
@@ -1685,6 +1700,10 @@ label1:
         if (k + 1 == flag_is_ancilla_to_pick_up)
           flag_is_ancilla_to_pick_up = 0;
         if (!ancilla_timer[k]) {
+          // Correzioni minori GBA (0x811bff6): fischio della caduta se la
+          // bomba non sta gia' esplodendo
+          if ((enhanced_features0 & kFeatures0_GbaMinorFixes) && !ancilla_item_to_link[k])
+            Ancilla_Sfx2_Pan(k, 0x20);
           ancilla_type[k] = 0;
           return;
         }
@@ -2528,7 +2547,7 @@ void Ancilla17_ShovelDirt(int k) {  // 88a9a9
   Ancilla_PrepOamCoord(k, &pt);
   OamEnt *oam = GetOamCurPtr();
   if (!ancilla_timer[k]) {
-    ancilla_timer[k] = 8;
+    ancilla_timer[k] = (enhanced_features0 & kFeatures0_GbaMinorFixes) ? 6 : 8;
     if (++ancilla_item_to_link[k] == 2) {
       ancilla_type[k] = 0;
       return;
@@ -4914,8 +4933,7 @@ void Ancilla27_Duck(int k) {  // 88dde8
     goto endif_1;
 
   if (ancilla_timer[k]) {
-    int xt = (enhanced_features0 & kFeatures0_ExtendScreen64) ? 0x40 : 0;
-    Ancilla_SetXY(k, BG2HOFS_copy2 - 16 - xt, link_y_coord - 8);
+    Ancilla_SetXY(k, BG2HOFS_copy2 - 16 - Bird_ScreenExt(), link_y_coord - 8);
     return;
   }
 
@@ -5022,7 +5040,7 @@ endif_5:
   if (ancilla_step[k])
     AncillaDraw_Shadow(oam, 1, info.x - 7, info.y + 28, 0x30);
 
-  if (!sign16(info.x) && info.x >= 0x130) {
+  if (!sign16(info.x) && info.x >= 0x130 + Bird_ScreenExt()) {
     ancilla_type[k] = 0;
     if (!ancilla_L[k] && ancilla_step[k]) {
       submodule_index = 10;
@@ -5271,6 +5289,9 @@ label1:
             link_speed_setting = 0;
             bitmask_of_dragstate = 0;
           }
+          // Correzioni minori GBA (0x811f3e8): fischio della caduta
+          if (enhanced_features0 & kFeatures0_GbaMinorFixes)
+            Ancilla_Sfx2_Pan(k, 0x20);
           ancilla_type[k] = 0;
           return;
         }
@@ -6764,7 +6785,7 @@ void AddBirdTravelSomething(uint8 a, uint8 y) {  // 89951d
     link_cant_change_direction &= ~1;
     ancilla_L[k] = 1;
 
-    if (enhanced_features0 & kFeatures0_ExtendScreen64) {
+    if (Bird_ScreenExt()) {
       // todo: tune these better so the angle of attack is better
       ancilla_z_vel[k] = 58;
       ancilla_z[k] = -105;
@@ -6774,6 +6795,10 @@ void AddBirdTravelSomething(uint8 a, uint8 y) {  // 89951d
     }
     ancilla_step[k] = 2;
     AddBirdCommon(k);
+    // la discesa e' tarata per partire 0x40 pixel fuori e posare Link al centro
+    // dopo lo stesso numero di fotogrammi: piu' strada, un po' piu' veloce
+    if (Bird_ScreenExt())
+      ancilla_x_vel[k] = 56 * (Bird_ScreenExt() + 144) / (0x40 + 144);
   }
 }
 
@@ -7450,7 +7475,7 @@ void Ancilla_TerminateIfOffscreen(int j) {  // 8ffd52
       ancilla_type[j] = 0;
     return;
   }
-  int xt = (enhanced_features0 & kFeatures0_ExtendScreen64) ? 0x40 : 0;
+  int xt = (enhanced_features0 & kFeatures0_ExtendScreen64) ? g_zenv.ppu->extraLeftRight : 0;
   uint16 x = Ancilla_GetX(j) - BG2HOFS_copy2 + xt;
   uint16 y = Ancilla_GetY(j) - BG2VOFS_copy2;
   if (x >= 244 + xt * 2 || y >= 240)

@@ -7,6 +7,7 @@
 #include "assets.h"
 #include "audio.h"
 #include "hd_rumble.h"
+#include "screens_it.h"
 
 static const uint8 kNmiVramAddrs[] = {
   0, 0, 4, 8, 12, 8, 12, 0, 4, 0, 8, 4, 12, 4, 12, 0,
@@ -234,6 +235,7 @@ void NMI_DoUpdates() {  // 8089e0
     default: assert(0);
     }
     HandleStripes14(p);
+    ScreensIt_FileSelectAfterStripes();
     if (nmi_load_bg_from_vram == 1)
       vram_upload_offset = 0;
     nmi_load_bg_from_vram = 0;

@@ -46,6 +46,13 @@ uint8 Overworld_GetTileAttributeAtLocation(uint16 x, uint16 y) {  // 80882e
   // Ghiaccio, per Link, i nemici e gli oggetti
   if ((rv == 0x08 || rv == 0x09) && HdBurn_IsFrozenAt(x << 3, y))
     rv = 0x0f;
+  // Correzioni minori GBA: scale della Torre di Ganon (area 0x43). Sotto il
+  // bordo del balcone le caselle della scalinata (map8 0x12e/0x13e/0x13f, x
+  // 2288-2319, y 104-127) sono pavimento: Link, coperto dal balcone, ci andava
+  // a velocita' piena e sembrava saltare un pezzo di scale. Ora sono scale
+  if (rv == 0 && (enhanced_features0 & kFeatures0_GbaMinorFixes) && overworld_screen_index == 0x43 &&
+      (uint16)(x - (2288 >> 3)) < 4 && (uint16)(y - 104) < 24)
+    rv = 0x22;
   if (rv >= 0x10 && rv < 0x1C) {
     rv |= (t >> 14) & 1;
   }

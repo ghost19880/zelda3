@@ -29,4 +29,10 @@ void HudIt_DrawAbility(uint16 *dst, int ability, int level, bool wide);
 // a sinistra, righe da 32 caselle)
 void HudIt_DrawItemName(uint16 *dst, int item, int btn_index);
 
+typedef struct Ppu Ppu;
+// "VITA" al posto di "LIFE" nell'HUD, "MAPPA" e "LIVELLO" al posto di "MAP"
+// e "LEVEL" nella mappa dei labirinti, solo mentre la PPU disegna il fotogramma
+void HudIt_BeforeRender(Ppu *ppu);
+void HudIt_AfterRender(Ppu *ppu);
+
 #endif  // ZELDA3_HUD_IT_H_

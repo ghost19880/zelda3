@@ -62,7 +62,11 @@ enum {
   // caricamento si fanno in un frame, Link si disegna mentre cammina a
   // velocita' costante e la telecamera parte e frena dolcemente (hd_trans.c)
   kFeatures0_FastTransitions = 1 << 17,
-  // 1 << 18 libero
+  // Correzioni minori GBA: piccole differenze della versione GBA (suoni,
+  // grafica, errori corretti: Mothula, nuvole del Monte della Morte, scale
+  // della Torre di Ganon, super bomba che si gonfia...). Prima 1 << 18 era
+  // ShowXLRItemsInHud, tolta
+  kFeatures0_GbaMinorFixes = 1 << 18,
   // Pozione d'oro, da BS Zelda - Le Antiche Tavole di Pietra: quarto calderone
   // nella bottega della strega, con i calderoni a 32 pixel l'uno dall'altro
   // (sprite_main.c, Sprite_GoldCauldron). Prima 1 << 19 era la transizione

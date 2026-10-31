@@ -384,6 +384,10 @@ void Module0E_0B_SaveMenu() {  // 80f9fa
       index_of_changable_dungeon_objs[1] = 0;
     } else {
       choice_in_multiselect_box = choice_in_multiselect_box_bak;
+      // Correzioni minori GBA: suono alla chiusura (GBA 0x74; qui quello
+      // della chiusura del menu degli oggetti)
+      if (enhanced_features0 & kFeatures0_GbaMinorFixes)
+        sound_effect_2 = 18;
     }
   }
 }
@@ -2916,12 +2920,76 @@ bool Text_WaitingForKey(void) {
   return (k == kTextCmd_Waitkey || k == kTextCmd_EndMessage) && text_wait_countdown2 == 0;
 }
 
+// Correzioni minori GBA: i messaggi delle sette fanciulle (306-312) e di Zelda
+// (316) vanno a pagine come su GBA (stessi numeri, dove ogni paragrafo
+// si cancella prima del successivo): lo [Scroll] subito dopo un [Waitkey]
+// svuota il riquadro e torna alla prima riga, i due seguenti scendono alla
+// seconda e alla terza; oltre la terza riga si scorre come sempre
+enum { kTextPara_Up, kTextPara_Clear, kTextPara_Next };
+
+static bool Text_PagedMessage(void) {
+  int m = dialogue_message_index;
+  return (enhanced_features0 & kFeatures0_GbaMinorFixes) && ((m >= 306 && m <= 312) || m == 316);
+}
+
+// prev = comando prima dello [Scroll], line = riga in cui si sta scrivendo
+static int Text_ParagraphKind(int prev, int line) {
+  return prev == kTextCmd_Waitkey ? kTextPara_Clear : line < 2 ? kTextPara_Next : kTextPara_Up;
+}
+
+static int Text_ParagraphStep(int kind, int line) {
+  return kind == kTextPara_Clear ? 0 : kind == kTextPara_Next ? line + 1 : 2;
+}
+
+// Cancellazione della pagina: 3 righe di 168 pixel in strisce da 4
+enum { kTextPageClearCols = 42, kTextPageClearSteps = 3 * kTextPageClearCols };
+
+static void Text_PageClearStrip(int n) {
+  static const uint16 kLinePos[3] = { 0, 0x2a0, 0x540 };
+  int col = n % kTextPageClearCols;
+  uint8 *p = (uint8 *)messaging_buf + kLinePos[n / kTextPageClearCols] + (col >> 1) * 16;
+  uint8 keep = col & 1 ? 0 : 0x0f;  // bit 7 = pixel a sinistra
+  for (int i = 0; i < 16; i++)
+    p[i] &= keep, p[i + 0x150] &= keep;
+}
+
+static int Text_ParagraphKindAt(int upto);
+
+// Testo moderno: strisce cancellate della riga (0-2) della pagina in corso
+int Text_PageClearCols(int line) {
+  if (!Text_PagedMessage() || text_wait_countdown == 0)
+    return 0;
+  uint32 cmd = Text_DecodeCmd(messaging_text_buffer[dialogue_msg_read_pos], &messaging_text_buffer[dialogue_msg_read_pos + 1]);
+  if (TEXTCMD_CMD(cmd) != kTextCmd_Scroll || Text_ParagraphKindAt(dialogue_msg_read_pos) != kTextPara_Clear)
+    return 0;
+  return IntMax(0, IntMin(text_wait_countdown - line * kTextPageClearCols, kTextPageClearCols));
+}
+
+// Cosa fa lo [Scroll] che sta a upto nel messaggio caricato
+static int Text_ParagraphKindAt(int upto) {
+  int line = 0, prev = -1;
+  for (int pos = 0; pos < upto && pos < 0x7f0;) {
+    uint32 cmd = Text_DecodeCmd(messaging_text_buffer[pos], &messaging_text_buffer[pos + 1]);
+    int k = TEXTCMD_CMD(cmd);
+    if (k == kTextCmd_EndMessage)
+      break;
+    if (k == kTextCmd_1 || k == kTextCmd_2 || k == kTextCmd_3)
+      line = k - kTextCmd_1;
+    else if (k == kTextCmd_Scroll)
+      line = Text_ParagraphStep(Text_ParagraphKind(prev, line), line);
+    prev = k;
+    pos += 1 + TEXTCMD_MULTIBYTE(cmd);
+  }
+  return Text_ParagraphKind(prev, line);
+}
+
 // Testo moderno: ripete cio' che il gioco ha gia' scritto del messaggio (fino
 // a dialogue_msg_read_pos) come lo scrive VWF_RenderSingle: per ogni lettera
 // riga (0-2) e posto, e le righe che salgono dopo ogni scorrimento finito.
 // Tutto viene dalla RAM, quindi vale anche dopo un salvataggio rapido.
 void Text_ReplayMessage(void (*on_char)(int line, int slot, int c), void (*on_lines_up)(void)) {
-  int line = 0, slot = 0;
+  int line = 0, slot = 0, prev = -1;
+  bool paged = Text_PagedMessage();
   for (int pos = 0; pos < dialogue_msg_read_pos && pos < 0x7f0;) {
     uint32 cmd = Text_DecodeCmd(messaging_text_buffer[pos], &messaging_text_buffer[pos + 1]);
     int k = TEXTCMD_CMD(cmd);
@@ -2932,9 +3000,12 @@ void Text_ReplayMessage(void (*on_char)(int line, int slot, int c), void (*on_li
     } else if (k == kTextCmd_1 || k == kTextCmd_2 || k == kTextCmd_3) {
       line = k - kTextCmd_1, slot = 0;
     } else if (k == kTextCmd_Scroll) {
-      on_lines_up();
-      line = 2, slot = 0;
+      int kind = paged ? Text_ParagraphKind(prev, line) : kTextPara_Up;
+      for (int i = 0; i < (kind == kTextPara_Clear ? 3 : kind == kTextPara_Up); i++)
+        on_lines_up();
+      line = Text_ParagraphStep(kind, line), slot = 0;
     }
+    prev = k;
     pos += 1 + TEXTCMD_MULTIBYTE(cmd);
   }
 }
@@ -3168,6 +3239,11 @@ RESTART:;
 
   switch (TEXTCMD_CMD(cmd)) {
   case kTextCmd_IsLetter:
+    // Correzioni minori GBA (0x8128d7c): un tasto premuto mentre il testo lento
+    // scorre lo porta a una lettera per fotogramma fino al prossimo [Speed]
+    if ((enhanced_features0 & kFeatures0_GbaMinorFixes) && vwf_line_speed >= 2 &&
+        ((filtered_joypad_H | filtered_joypad_L) & 0xc0))
+      vwf_line_speed = vwf_line_speed_cur = 1;
     if (vwf_line_speed_cur >= 2 && !fast) {
       vwf_line_speed_cur--;
       break;
@@ -3219,6 +3295,25 @@ RESTART:;
     RenderText_Draw_Choose1Or2();
     break;
   case kTextCmd_Scroll:  // RenderText_Draw_Scroll
+    if (Text_PagedMessage()) {  // pagine come su GBA
+      int kind = Text_ParagraphKindAt(dialogue_msg_read_pos);
+      if (kind != kTextPara_Up) {
+        // come su GBA la pagina si cancella da sinistra a destra, una riga
+        // dopo l'altra, 4 pixel per fotogramma (text_wait_countdown conta le
+        // strisce gia' cancellate: e' nella RAM, vale anche nei salvataggi)
+        // (il tasto che chiude la pagina e' ancora premuto: con TextSpeed 1
+        // non la accelera, solo il testo sempre istantaneo la salta)
+        if (kind == kTextPara_Clear && g_text_speed < 2 && text_wait_countdown < kTextPageClearSteps) {
+          Text_PageClearStrip(text_wait_countdown++);
+          break;
+        }
+        if (kind == kTextPara_Clear)
+          memset(messaging_buf, 0, 0x7e0), text_wait_countdown = 0;
+        vwf_curline = kind == kTextPara_Clear ? 0 : vwf_curline + 2;
+        vwf_flag_next_line = 1;
+        goto COMMAND_DONE;
+      }
+    }
     if (RenderText_Draw_Scroll())
       goto COMMAND_DONE;
     break;
@@ -3709,6 +3804,10 @@ void Death_PrepFaint() {  // 8ffa6f
 
 
 void DisplaySelectMenu() {
+  // Correzioni minori GBA: suono all'apertura del menu di salvataggio (la GBA
+  // ha un suono suo, 0x73: qui quello dell'apertura del menu degli oggetti)
+  if (enhanced_features0 & kFeatures0_GbaMinorFixes)
+    sound_effect_2 = 17;
   choice_in_multiselect_box_bak = choice_in_multiselect_box;
   dialogue_message_index = 0x186;
   uint8 bak = main_module_index;

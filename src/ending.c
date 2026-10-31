@@ -8,6 +8,7 @@
 #include "overworld.h"
 #include "player.h"
 #include "misc.h"
+#include "screens_it.h"
 #include "messaging.h"
 #include "player_oam.h"
 #include "sprite_main.h"
@@ -504,10 +505,22 @@ void Polyhedral_InitializeThread() {  // 89f7de
   memcpy(&g_ram[0x1f32], kPolyThreadInit, 13);
 }
 
-void Module00_Intro() {  // 8cc120
-  uint8 skip_at = enhanced_features0 & kFeatures0_SkipIntroOnKeypress ? 4 : 8;
+// Con SkipIntroOnKeypress l'intro si salta come nella ROM europea, che accetta
+// A, B, X, Y o Start dal sottomodulo 4 (la Triforza che gira): ci arriva dopo
+// 170 fotogrammi a 50 Hz, cioe' 3,4 secondi. Qui il logo Nintendo resta a
+// schermo piu' a lungo, quindi si conta il tempo: 3,4 secondi = 204 fotogrammi.
+enum { kIntroSkipFrames = 204 };
+static uint16 intro_frames;
 
-  if (submodule_index >= skip_at && ((filtered_joypad_L & 0xc0 | filtered_joypad_H) & 0xd0)) {
+void Module00_Intro() {  // 8cc120
+  if (submodule_index == 0)
+    intro_frames = 0;
+  else if (intro_frames < 0xffff)
+    intro_frames++;
+  bool can_skip = enhanced_features0 & kFeatures0_SkipIntroOnKeypress ?
+      submodule_index >= 3 && intro_frames >= kIntroSkipFrames : submodule_index >= 8;
+
+  if (can_skip && ((filtered_joypad_L & 0xc0 | filtered_joypad_H) & 0xd0)) {
     FadeMusicAndResetSRAMMirror();
     return;
   }
@@ -1211,15 +1224,39 @@ void Intro_SetupSwordAndIntroFlash() {  // 8cfe45
   Intro_PeriodicSwordAndIntroFlash();
 }
 
+// Meno flash GBA (0x812f5f4 / 0x812f32c): quando la spada si pianta un solo
+// lampo bianco (BLDY 0x1f, lampo 0x28): pieno per ~23 fotogrammi, poi sfuma
+// in 16. Qui con il colore fisso sugli strati che il titolo somma
+static uint8 g_gba_title_bldy;
+// la somma dei colori del titolo vale anche per il logo (BG1) e la spada:
+// durante il lampo resta solo sullo sfondo, poi torna il valore del gioco
+static uint8 g_title_math_game, g_title_math_set;
+
 void Intro_PeriodicSwordAndIntroFlash() {  // 8cfe56
   if (intro_sword_18)
     intro_sword_18--;
   SetBackdropcolorBlack();
-  if (intro_times_pal_flash) {
+  if (intro_sword_ypos == 0xff7e)  // spada appena messa in cima (Intro_SetupSwordAndIntroFlash)
+    g_gba_title_bldy = 0;
+  if (enhanced_features0 & kFeatures0_DimFlashesGba) {
+    if (intro_times_pal_flash && --intro_times_pal_flash <= 0x1f && g_gba_title_bldy)
+      g_gba_title_bldy--;
+    int y = g_gba_title_bldy > 16 ? 16 : g_gba_title_bldy;
+    if (CGADSUB_copy != g_title_math_set)
+      g_title_math_game = CGADSUB_copy;
+    CGADSUB_copy = y ? (g_title_math_game & 0xe0) : g_title_math_game;
+    g_title_math_set = CGADSUB_copy;
+    if (y) {
+      int v = y * 31 / 16;
+      COLDATA_copy0 = 0x20 | v;
+      COLDATA_copy1 = 0x40 | v;
+      COLDATA_copy2 = 0x80 | v;
+    }
+  } else if (intro_times_pal_flash) {
     if ((intro_times_pal_flash & 3) != 0) {
       // la GBA ha un altro titolo e non fa questo lampo
       if (!(enhanced_features0 & kFeatures0_DimFlashesGba))
-        (&COLDATA_copy0)[intro_sword_24] |= (enhanced_features0 & kFeatures0_DimFlashes) ? 0x05 : 0x1f;
+        (&COLDATA_copy0)[intro_sword_24] |= (enhanced_features0 & kFeatures0_DimFlashes) ? 0x07 : 0x1f;  // VC 8cfe6f
       intro_sword_24 = (intro_sword_24 == 2) ? 0 : intro_sword_24 + 1;
     }
     intro_times_pal_flash--;
@@ -1238,7 +1275,8 @@ void Intro_PeriodicSwordAndIntroFlash() {  // 8cfe56
       sound_effect_1 = 1;
     } else if (intro_sword_ypos == 14) {
       WORD(intro_sword_24) = 0;
-      intro_times_pal_flash = 0x20;
+      intro_times_pal_flash = (enhanced_features0 & kFeatures0_DimFlashesGba) ? 0x28 : 0x20;
+      g_gba_title_bldy = 0x1f;
       sound_effect_1 = 0x2c;
     }
     intro_sword_ypos += 16;
@@ -2537,7 +2575,9 @@ void Credits_AddNextAttribution() {  // 8ebe24
   dst += 3;
 
   if (R18 < 394) {
-    const uint8 *src = &kEnding_Credits_Text[kEnding_Credits_Offs[R18]];
+    const uint8 *src = ScreensIt_CreditsRow(R18);
+    if (!src)
+      src = &kEnding_Credits_Text[kEnding_Credits_Offs[R18]];
     if (*src != 0xff) {
       *dst++ = swap16(R16 + *src++);
       int n = *src++;
@@ -2552,7 +2592,7 @@ void Credits_AddNextAttribution() {  // 8ebe24
       int t = kEnding_Credits_DigitChar[ending_which_dung & 1];
       WORD(g_ram[0xce]) = t;
 
-      dst[0] = swap16(R16 + 0x19);
+      dst[0] = swap16(R16 + ScreensIt_CreditsDigitsColumn());
       dst[1] = 0x500;
 
       uint16 deaths = deaths_per_palace[kEnding_Func9_Tab2[ending_which_dung >> 1]];
@@ -2585,6 +2625,7 @@ void Credits_AddEndingSequenceText() {  // 8ec303
 
   const uint8 *curo = &kEnding0_Data[kEnding0_Offs[submodule_index >> 1]];
   const uint8 *endo = &kEnding0_Data[kEnding0_Offs[(submodule_index >> 1) + 1]];
+  ScreensIt_EndingScene(submodule_index >> 1, curo, endo, &curo, &endo);
   do {
     dst[0] = WORD(curo[0]);
     dst[1] = WORD(curo[2]);

@@ -577,18 +577,23 @@ static void ApplyWindowRays(uint8 *pixels, int pitch, int width, int height, int
 static void ApplyItemGlow(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext) {
   for (int k = 0; k < kAncilla_Slots; k++) {
     int type = ancilla_type[k];
-    if (type != 0x22 && type != 0x29 && type != 0x35)
-      continue;  // oggetto ricevuto, Amuleto/Cristallo, Spada Suprema
+    // oggetto ricevuto (anche i medaglioni quando Link li solleva) e Spada
+    // Suprema; non a terra (0x29: dopo il boss c'e' gia', invisibile, finche'
+    // non si prende il portacuore) ne' il cristallo che sale (0x3e)
+    if (type != 0x22 && type != 0x35)
+      continue;
     // Centro dell'oggetto come lo disegna il gioco (Ancilla_ReceiveItem_Draw):
     // largo 16 pixel, oppure 8 (spade, bacchette...) se kReceiveItem_Tab1 e' 0;
-    // alto 16; gli Amuleti e i Cristalli si sollevano di ancilla_z; gli sprite
-    // compaiono una riga sotto la loro coordinata.
+    // alto 16; gli sprite compaiono una riga sotto la loro coordinata.
     int item = ancilla_item_to_link[k];
+    // portacuori e pezzi di cuore: niente raggi, solo per gli oggetti veri
+    if (type == 0x22 && (item == 0x17 || item == 0x26 || item == 0x3e || item == 0x3f))
+      continue;
     float half_w = (type == 0x35 || (item < 76 && kReceiveItem_Tab1[item])) ? 8.0f : 4.0f;
-    float lift = (type == 0x29) ? (float)(int8)ancilla_z[k] : 0.0f;
     float cx = (ancilla_x_hi[k] << 8 | ancilla_x_lo[k]) + half_w - cam_x + ext;
-    float cy = (ancilla_y_hi[k] << 8 | ancilla_y_lo[k]) + 9 - lift - cam_y;
-    float big = (type == 0x22) ? 1.0f : 1.5f;
+    float cy = (ancilla_y_hi[k] << 8 | ancilla_y_lo[k]) + 9 - cam_y;
+    bool milestone = type == 0x22 && (item == 0x20 || (item >= 0x37 && item <= 0x39));
+    float big = (type == 0x22 && !milestone) ? 1.0f : 1.5f;
     float radius = 52 * big;
     float rot = g_fx_frames * 0.03f;
     int x0 = IntMax((int)(cx - radius), 0), x1 = IntMin((int)(cx + radius), width - 1);
@@ -608,6 +613,56 @@ static void ApplyItemGlow(uint8 *pixels, int pitch, int width, int height, int c
         float v = (ray * 0.9f + core * 0.5f) * (1.0f - d);
         AddColor(&row[x], 255, 235, 160, v * 0.75f);
       }
+    }
+  }
+}
+
+// Scena della fanciulla (Module07_18_RescuedMaiden): la stanza e' svuotata
+// con la casella 0x1ec e il cristallo grande e' un riquadro di caselle 0x1f80
+// di BG1 (disegnate dal motore poliedrico) in uno dei posti di kCrystal_Tab0
+static bool CrystalCutsceneOn(void) {
+  static const uint16 kCrystalPos[3] = { 0x1618, 0x1658, 0x658 };
+  if (!player_is_indoors || dung_bg1[0] != 0x1ec)
+    return false;
+  for (int i = 0; i < 3; i++)
+    if (dung_bg1[kCrystalPos[i] >> 1] == 0x1f80)
+      return true;
+  return false;
+}
+
+// Il cristallo dei labirinti (a terra, sollevato da Link e mentre sale) e i
+// tre medaglioni dei primi labirinti restano come li disegna il gioco: i loro
+// pixel passano al layer 2 (HUD), che lo shader Four Swords non tocca. Lo
+// sprite e' 16x16 una riga sotto la coordinata
+static void KeepCrystalUnpainted(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext) {
+  if (CrystalCutsceneOn()) {
+    // sfondo nero e cristallo come li disegna il gioco; Link e la fanciulla
+    // restano dipinti
+    for (int y = 0; y < height; y++) {
+      uint32 *row = (uint32 *)(pixels + y * pitch);
+      for (int x = 0; x < width; x++)
+        if (!IsSprite(row[x]))
+          row[x] = (row[x] & 0x00ffffff) | 2u << 24;
+    }
+    return;
+  }
+  for (int k = 0; k < kAncilla_Slots; k++) {
+    int type = ancilla_type[k];
+    int item = ancilla_item_to_link[k];  // 0x20 cristallo, 0x37-0x39 medaglioni
+    if (!((type == 0x22 || type == 0x29) && (item == 0x20 || (item >= 0x37 && item <= 0x39))) && type != 0x3e)
+      continue;
+    // a terra si disegna solo dopo il boss (Ancilla29_MilestoneItemReceipt):
+    // prima e' invisibile e Link ci puo' passare sopra
+    if (type == 0x29 && (!(dung_savegame_state_bits & 0x8000) || byte_7E04C2 != 0))
+      continue;
+    int lift = type == 0x29 ? (int8)ancilla_z[k] : 0;
+    int sx = (ancilla_x_hi[k] << 8 | ancilla_x_lo[k]) - cam_x + ext;
+    int sy = (ancilla_y_hi[k] << 8 | ancilla_y_lo[k]) + 1 - lift - cam_y;
+    for (int y = IntMax(sy, 0); y < IntMin(sy + 16, height); y++) {
+      uint32 *row = (uint32 *)(pixels + y * pitch);
+      for (int x = IntMax(sx, 0); x < IntMin(sx + 16, width); x++)
+        if (IsSprite(row[x]))
+          row[x] = (row[x] & 0x00ffffff) | 2u << 24;
     }
   }
 }
@@ -1376,6 +1431,7 @@ void HdFx_AfterLight(uint8 *pixels, int pitch, int width, int height, int bias_x
     ApplyWindowRays(pixels, pitch, width, height, cam_x, cam_y, ext, step);
   if (g_fx_item_glow)
     ApplyItemGlow(pixels, pitch, width, height, cam_x, cam_y, ext);
+  KeepCrystalUnpainted(pixels, pitch, width, height, cam_x, cam_y, ext);
   if (mod == 9)
     ApplyBurning(pixels, pitch, width, height, cam_x, cam_y, ext, step);
   DrawParticles(pixels, pitch, width, height, cam_x, cam_y, ext);
@@ -2267,7 +2323,7 @@ void HdFx_DiveBeforeRender(Ppu *ppu) {
 // posata, nell'ultimo secondo prima dello scoppio cresce da 1x a 2x
 void HdFx_SuperBombBeforeRender(Ppu *ppu) {
   memset(ppu->objScale, 0, sizeof(ppu->objScale));
-  if (!(enhanced_features0 & kFeatures0_SwordAndItems) || follower_indicator != 13 ||
+  if (!(enhanced_features0 & kFeatures0_GbaMinorFixes) || follower_indicator != 13 ||
       g_super_bomb_oam >= 128 || (ppu->oam[g_super_bomb_oam * 2 + 1] & 0xff) != 0x22)
     return;
   int s;

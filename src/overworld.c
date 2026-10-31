@@ -2942,7 +2942,7 @@ void DecompressEnemyDamageSubclasses() {  // 82fe71
       {0x647, 1},  // Rampino: stordisce Debirando
       {0x64f, 3}, {0x71f, 3}, {0x85f, 3},  // Terremoto
       {0x85a, 0},  // Polvere: non trasforma lo Stalfos giallo
-      // Mothula e la Spada d'Oro (0x884/0x885): c'e' gia' in MiscBugFixes
+      // Mothula e la Spada d'Oro (0x884/0x885): c'e' gia' in GbaMinorFixes (Sprite_88_Mothula)
       {0xc9d, 1}, {0xc9e, 3}, {0xc9f, 1},  // medaglioni sui Tektite
     };
     for (int i = 0; i < (int)(sizeof(kGbaDamage) / sizeof(kGbaDamage[0])); i++)

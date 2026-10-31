@@ -101,6 +101,7 @@ static const FeatureOption kFeatureOptions[] = {
   { "Specchio verso il Mondo delle Tenebre", "MirrorToDarkworld", kFeatures0_MirrorToDarkworld },
   { "Correzioni di bug", "MiscBugFixes", kFeatures0_MiscBugFixes },
   { "Correzioni maggiori", "GameChangingBugFixes", kFeatures0_GameChangingBugFixes },
+  { "Correzioni minori GBA", "GbaMinorFixes", kFeatures0_GbaMinorFixes },
 };
 
 static const char *const kControlNames[12] = {
@@ -376,6 +377,7 @@ static const char *Tr(const char *it) {
     { "Specchio verso il Mondo delle Tenebre", "Mirror to the Dark World" },
     { "Correzioni di bug", "Bug fixes" },
     { "Correzioni maggiori", "Game changing bug fixes" },
+    { "Correzioni minori GBA", "GBA minor fixes" },
     { "L/R solo sui primi 4 oggetti", "Limit L/R to the first 4 items" },
     { "Borsa pi\xc3\xb9 grande", "Larger wallet" },
     { "Su", "Up" },
@@ -452,7 +454,7 @@ static const char *Tr(const char *it) {
     { "Cambia piano", "Change floor" },
     { "Croce", "D-pad" },
     { "Frecce", "Arrows" },
-    { "Fogne del castello", "Sewers" },
+    { "Prigione del castello", "Sewers" },
     { "Castello di Hyrule", "Hyrule Castle" },
     { "Palazzo dell'Est", "Eastern Palace" },
     { "Castello di Sabbia", "Desert Palace" },
@@ -1225,8 +1227,8 @@ static void DrawButtonHints(Canvas *cv) {
 // Labirinti per indice (cur_palace_index_x2 / 2): nome (sulla mappa del
 // labirinto e, se banner, all'ingresso) e livello dei labirinti del Mondo
 // delle Tenebre (0 = senza livello). Come su GBA (tabella dei messaggi
-// 0x814e498) fogne, Castello di Hyrule e torre di Agahnim non hanno la
-// scritta all'ingresso.
+// 0x814e498) prigione del castello, Castello di Hyrule e torre di Agahnim
+// non hanno la scritta all'ingresso.
 typedef struct DungeonEntry {
   const char *name;
   uint8 level;
@@ -1234,7 +1236,7 @@ typedef struct DungeonEntry {
 } DungeonEntry;
 
 static const DungeonEntry kDungeons[14] = {
-  { "Fogne del castello", 0, false },
+  { "Prigione del castello", 0, false },
   { "Castello di Hyrule", 0, false },
   { "Palazzo dell'Est", 0, true },
   { "Castello di Sabbia", 0, true },

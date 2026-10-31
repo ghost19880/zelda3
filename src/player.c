@@ -2759,7 +2759,11 @@ void LinkItem_ShovelAndFlute() {  // 87a313
 }
 
 void LinkItem_Shovel() {  // 87a32c
-  static const uint8 kShovelAnimDelay[] = { 7, 18, 16, 7, 18, 16 };
+  static const uint8 kShovelAnimDelaySnes[] = { 7, 18, 16, 7, 18, 16 };
+  // Correzioni minori GBA: pala veloce come su GBA (0x80a3358, tabella 0x816a8a2)
+  static const uint8 kShovelAnimDelayGba[] = { 7, 12, 10, 7, 12, 10 };
+  const uint8 *kShovelAnimDelay = (enhanced_features0 & kFeatures0_GbaMinorFixes) ?
+      kShovelAnimDelayGba : kShovelAnimDelaySnes;
   static const uint8 kShovelAnimDelay2[] = { 0, 1, 2, 0, 1, 2 };
   if (!(button_mask_b_y & 0x40)) {
     if (is_standing_in_doorway || !CheckYButtonPress())
@@ -3152,6 +3156,10 @@ void LinkState_SpinAttack() {  // 87a804
     state_for_spin_attack = kLinkSpinGraphicsByDir[step_counter_for_spin_attack + link_spin_offsets];
     link_delay_timer_spin_attack = kLinkSpinDelays[step_counter_for_spin_attack];
     TileDetect_MainHandler(8);
+    // Correzioni minori GBA (0x809d9b2): al passo 5 l'attacco rotante taglia
+    // anche l'erba sotto Link (al centro di un quadrato 3x3 restava)
+    if ((enhanced_features0 & kFeatures0_GbaMinorFixes) && step_counter_for_spin_attack == 5)
+      TileDetect_MainHandler(9);
   }
 }
 
@@ -3553,11 +3561,43 @@ void Player_CheckHandleCapeStuff() {  // 87ae8f
   }
 }
 
+// Il blocco di Somaria si sta spaccando (0x2e) o le sue schegge volano (0x01)
+static bool SomariaBlock_IsBursting(void) {
+  for (int i = kAncilla_LinkSlots - 1; i >= 0; i--) {
+    if (ancilla_type[i] == 0x2e || ancilla_type[i] == 0x01)
+      return true;
+  }
+  return false;
+}
+
 void LinkItem_CaneOfSomaria() {  // 87aec0
   static const uint8 kRodAnimDelays[] = { 3, 3, 5 };
+  // Y premuto mentre il blocco esplodeva, ancora tenuto
+  static bool pending_press;
   if (!(button_mask_b_y & 0x40)) {
-    if (player_on_somaria_platform || is_standing_in_doorway || !CheckYButtonPress())
+    if (player_on_somaria_platform || is_standing_in_doorway)
       return;
+    // Bastone usato troppo in fretta (patch "cane_somaria_fix" di Conn): finche'
+    // il blocco si spacca o le schegge volano non si crea un altro blocco.
+    // Rispetto alla patch la pressione non va persa: se Y resta tenuto, il
+    // blocco nuovo esce appena le schegge spariscono
+    if (enhanced_features0 & kFeatures0_GameChangingBugFixes) {
+      bool held = joypad1H_last & kJoypadH_Y;
+      if (SomariaBlock_IsBursting()) {
+        pending_press = (pending_press || (filtered_joypad_H & kJoypadH_Y)) && held;
+        return;
+      }
+      if (pending_press) {
+        pending_press = false;
+        if (held && !link_incapacitated_timer) {
+          button_mask_b_y |= 0x40;
+          goto pressed;
+        }
+      }
+    }
+    if (!CheckYButtonPress())
+      return;
+pressed:
     SomariaBlock_RemoveOffscreen();
     int i = kAncilla_LinkSlots - 1;
     bool did_charge_magic = false;
@@ -5566,17 +5606,20 @@ void TileDetect_MainHandler(uint8 item) {  // 87d077
       return;
     static const uint8 kDoSwordInteractionWithTiles_o[] = { 10, 6, 14, 2, 12, 4, 8, 0 };
     o = kDoSwordInteractionWithTiles_o[a] + 0x40;
+  } else if (item == 9) {
+    // Correzioni minori GBA (0x809fad8): la casella sotto Link (voci 40-43)
+    o = 0x50 + link_direction_facing;
   } else {
     o = item * 8 + link_direction_facing;
   }
   o >>= 1;
 
-  static const int8 kDoSwordInteractionWithTiles_x[] = { 8, 8, 8, 8, 6, 8, -1, 22, 19, 19, 0, 19, 6, 8, -1, 22, 8, 8, 8, 8, 8, 8, 0, 15, 6, 8, -10, 29, 6, 8, -6, 22, 6, 8, -4, 22, -4, 22, -4, 22 };
-  static const int8 kDoSwordInteractionWithTiles_y[] = { 20, 20, 20, 20, 4, 28, 16, 16, 22, 22, 22, 22, 4, 24, 16, 16, 16, 16, 16, 16, 20, 20, 23, 23, -4, 36, 16, 16, 4, 28, 16, 16, 4, 28, 16, 16, 4, 4, 28, 28 };
+  static const int8 kDoSwordInteractionWithTiles_x[] = { 8, 8, 8, 8, 6, 8, -1, 22, 19, 19, 0, 19, 6, 8, -1, 22, 8, 8, 8, 8, 8, 8, 0, 15, 6, 8, -10, 29, 6, 8, -6, 22, 6, 8, -4, 22, -4, 22, -4, 22, 8, 8, 8, 8 };
+  static const int8 kDoSwordInteractionWithTiles_y[] = { 20, 20, 20, 20, 4, 28, 16, 16, 22, 22, 22, 22, 4, 24, 16, 16, 16, 16, 16, 16, 20, 20, 23, 23, -4, 36, 16, 16, 4, 28, 16, 16, 4, 28, 16, 16, 4, 4, 28, 28, 20, 20, 20, 20 };
   uint16 x = ((link_x_coord + kDoSwordInteractionWithTiles_x[o]) & tilemap_location_calc_mask) >> 3;
   uint16 y = ((link_y_coord + kDoSwordInteractionWithTiles_y[o]) & tilemap_location_calc_mask);
 
-  if (item == 1 || item == 2 || item == 3 || item == 6 || item == 7 || item == 8) {
+  if (item == 1 || item == 2 || item == 3 || item == 6 || item == 7 || item == 8 || item == 9) {
     TileBehavior_HandleItemAndExecute(x, y);
     return;
   }
@@ -6811,7 +6854,8 @@ void AncillaAdd_ShovelDirt(uint8 a, uint8 y) {  // 898f5b
   int k = Ancilla_AddAncilla(a, y);
   if (k >= 0) {
     ancilla_item_to_link[k] = 0;
-    ancilla_timer[k] = 20;
+    // terra scavata: 12 + 6 fotogrammi su GBA (0x811d2bc) invece di 20 + 8
+    ancilla_timer[k] = (enhanced_features0 & kFeatures0_GbaMinorFixes) ? 12 : 20;
     Ancilla_SetXY(k, link_x_coord, link_y_coord);
   }
 }

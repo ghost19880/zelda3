@@ -2134,13 +2134,11 @@ bool Sprite_CheckTileProperty(int k, int j) {  // 86e73c
   if (sprite_tiletype == 0x44) {
     if (sprite_F[k] && !sign8(sprite_give_damage[k])) {
 
-      // Some mothula bug fix because we changed damage class 4.
-      if (sprite_type[k] == 0x88 && (enhanced_features0 & kFeatures0_MiscBugFixes)) {
-        if (sprite_hit_timer[k] == 0)
-          Ancilla_CheckDamageToSprite_preset(k, 6);
-      } else {
+      // Correzioni minori GBA (0x80c858c): i boss (sprite_flags & 2, come
+      // Mothula) non prendono il danno delle punte, cosi' il colpo appena
+      // ricevuto non va perso (Mothula spinto sulle punte restava illeso)
+      if (!((enhanced_features0 & kFeatures0_GbaMinorFixes) && (sprite_flags[k] & 2)))
         Ancilla_CheckDamageToSprite_preset(k, 4);
-      }
       if (sprite_hit_timer[k]) {
         sprite_hit_timer[k] = 153;
         sprite_F[k] = 0;
