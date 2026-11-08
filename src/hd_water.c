@@ -357,6 +357,10 @@ static int CellEntry(int wx, int wy) {
   return Overworld_GetMap8AtLocation((uint16)wx >> 3, (uint16)wy);
 }
 
+int HdWater_OwEntry(int wx, int wy) {
+  return CellEntry(wx, wy);
+}
+
 // Le cascate dell'esterno (Cascata dei Desideri, Dominio di Zora e le altre):
 // bordo in cima 0x1ca-0x1cb, corpo 0x1cc, fondo 0x1cd, sempre con la palette 7
 // (HdWater_IsWaterfallEntry, hd_water.h)
@@ -1325,6 +1329,7 @@ typedef struct ClassJob {
   int pitch, w, cam_x, cam_y, ext;
   bool outdoors, falls, outside_area;
   bool stream;  // getto che scende nella vasca vuota (leva del Palazzo della Palude)
+  bool hud_holes;  // ending: the place names are holes like the sprites
   int n_water[kHdParMaxParts], n_fall[kHdParMaxParts];
   float fall_sum[kHdParMaxParts][3];
 } ClassJob;
@@ -1361,7 +1366,8 @@ static void ClassifyRows(void *ctx, int part, int y0, int y1) {
       // dello sfondo in g_pre, SpritesShowBackground). Restano sprite (l) solo
       // per i getti e le cascate, che passano dietro senza interrompersi
       uint32 sl = l;
-      if (l == 4 || l == 6) {
+      bool hole = l == 4 || l == 6 || (l == kLayerHud && j->hud_holes);
+      if (hole) {
         bool under = outdoors ? IsWaterCell(CellAt(x, y, cam_x, cam_y, ext)) : DungeonWaterUnderSprite(x, y, ext);
         l = under ? kLayerWater : 1;
       }
@@ -1370,7 +1376,7 @@ static void ClassifyRows(void *ctx, int part, int y0, int y1) {
       if (!outdoors && l == kLayerWater)
         dp[x] = DungeonDepthAt(x - ext + cam_x, y + cam_y);
       g_fixed[y * w + x] = 0;
-      g_spr[y * w + x] = (sl == 4 || sl == 6) && x >= g_vis_x0 && x < g_vis_x1 && y < g_vis_y1;
+      g_spr[y * w + x] = hole && x >= g_vis_x0 && x < g_vis_x1 && y < g_vis_y1;
       int spout =!outdoors && j->falls ? SpoutAt(x - ext + cam_x, y + cam_y) : 0;
       if (x < g_vis_x0 || x >= g_vis_x1 || y >= g_vis_y1) {
         k[x] = 0;  // fasce nere: non e' una riva
@@ -1675,6 +1681,28 @@ static void MarkDarkShoreCells(void) {
     for (int cx = 0; cx < kMaxCellsX; cx++)
       anim[cy][cx] = g_cell_anim[cy][cx] >= 0;
   DilateCells(near_anim, anim, 2);
+  // A shore strip keeps going along touching shore cells with the same
+  // palette, even farther than 2 cells from the water ones: the left edge of
+  // the pool above the dam in area 0x77 (attribute 0x02, no water cells
+  // beside it) kept its original green lines in its lower part
+  for (bool grew = true; grew;) {
+    grew = false;
+    for (int cy = 0; cy < kMaxCellsY; cy++)
+      for (int cx = 0; cx < kMaxCellsX; cx++) {
+        int a = g_cell_shore[cy][cx];
+        if (a < 0 || near_anim[cy][cx])
+          continue;
+        static const int8 kDir[4][2] = { { 0, -1 }, { 0, 1 }, { -1, 0 }, { 1, 0 } };
+        for (int k = 0; k < 4; k++) {
+          int y = cy + kDir[k][1], x = cx + kDir[k][0];
+          if (y >= 0 && x >= 0 && y < kMaxCellsY && x < kMaxCellsX && near_anim[y][x] && g_cell_shore[y][x] >= 0 &&
+              (g_cell_shore[y][x] & 0x1c00) == (a & 0x1c00)) {
+            near_anim[cy][cx] = 1, grew = true;
+            break;
+          }
+        }
+      }
+  }
   // il colore piu' scuro, una volta per casella animata diversa
   static uint32 cache[256];
   static uint8 known[256];
@@ -1954,7 +1982,7 @@ static void KeepSpritesOverWater(int w, int h, int ext) {
   g_num_see_through = 0;
   for (int i = 0; i < w * h; i++) {
     uint32 l = g_pre[i] >> 24;
-    if (g_kind[i] != 1 || (l != 4 && l != 6))
+    if (g_kind[i] != 1 || (l != 4 && l != 6 && !(l == kLayerHud && g_spr[i])))
       continue;
     if (g_obj_math_valid && (g_obj_math[i] >> 31) && SeeThroughWater(i, w, ext)) {
       g_num_see_through++;
@@ -2504,7 +2532,10 @@ void HdWater_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
   // e' una colonna stretta che scende dalla bocca fino al fondo della vasca
   bool stream = !outdoors && main_module_index == 7 && submodule_index == 12 && subsubmodule_index == 10;
   SpritesShowBackground(w, h, ext);
-  ClassJob cj = { pixels, pitch, w, cam_x, cam_y, ext, outdoors, falls, outside_area, stream };
+  // the place names of the ending (BG3, over the scene): the water goes on
+  // under them as under the sprites, they made a shore and a hole in it
+  bool hud_holes = HdFx_EndingScene() != 0;
+  ClassJob cj = { pixels, pitch, w, cam_x, cam_y, ext, outdoors, falls, outside_area, stream, hud_holes };
   HdPar_For(ClassifyRows, &cj, h);
   g_spr_src_ready = false;  // g_spr is new: the first fill looks for the sources
   FillSpriteHoles(w, h);

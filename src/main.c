@@ -190,15 +190,10 @@ static void DrawPpuFrameWithPerf() {
   }
   if (g_display_perf)
     RenderNumber(pixel_buffer + pitch * render_scale, pitch, g_curr_fps, render_scale == 4);
+  // Pausa scurita: funziona con qualunque metodo di output. The darkening is
+  // done in HdMenu_Draw (Host_PauseDimmed), after the HUD and the texts and
+  // before the options menu
   HdMenu_Draw(pixel_buffer, pitch, g_snes_width * render_scale, g_snes_height * render_scale, render_scale);
-  // Pausa scurita: funziona con qualunque metodo di output
-  if (g_paused && g_pause_dimmed) {
-    for (int y = 0; y < g_snes_height * render_scale; y++) {
-      uint32 *row = (uint32 *)(pixel_buffer + y * pitch);
-      for (int x = 0; x < g_snes_width * render_scale; x++)
-        row[x] = ((row[x] >> 1 & 0x7f7f7f) - (row[x] >> 3 & 0x1f1f1f)) | (row[x] & 0xff000000);
-    }
-  }
   g_renderer_funcs.EndDraw();
 }
 
@@ -627,6 +622,8 @@ int main(int argc, char** argv) {
     // sarebbe aperto ma invisibile)
     if (menu_open) {
       DrawPpuFrameWithPerf();
+      // closed during the pause: the paused frame (dimmed) is drawn again
+      g_pause_redraw = true;
       SDL_Delay(16);
       continue;
     }
@@ -1230,6 +1227,10 @@ void Host_SetPpuRenderFlags(uint32 flags) {
 void Host_ClearInputs() {
   g_input1_state = 0;
   g_gamepad_buttons = 0;
+}
+
+bool Host_PauseDimmed() {
+  return g_paused && g_pause_dimmed;
 }
 
 void Host_Quit() {

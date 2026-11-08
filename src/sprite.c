@@ -3868,8 +3868,13 @@ void Garnish01_FireSnakeTail(int k) {  // 89b6c0
 
 void Garnish02_MothulaBeamTrail(int k) {  // 89b6e1
   int j = garnish_sprite[k];
+  uint8 flags = sprite_oam_flags[j] | sprite_obj_prio[j];
+  // The rings outlive the beam by 16 frames; meanwhile a spike (or anything
+  // else) spawned in the beam's slot gave them its own colors (bluish rings)
+  if (sprite_type[j] != 0x89 && (enhanced_features0 & kFeatures0_MiscBugFixes))
+    flags = garnish_oam_flags[k];
   SetOamPlain(GetOamCurPtr(), garnish_x_lo[k] - BG2HOFS_copy2, garnish_y_lo[k] - BG2VOFS_copy2, 0xaa,
-               sprite_oam_flags[j] | sprite_obj_prio[j], 2);
+               flags, 2);
 }
 
 void Dungeon_ResetSprites() {  // 89c114

@@ -22569,6 +22569,8 @@ void Sprite_89_MothulaBeam(int k) {  // 9ebb42
       garnish_countdown[i] = 16;
       garnish_sprite[i] = k;
       garnish_floor[i] = sprite_floor[k];
+      // the beam's own colors, for Garnish02_MothulaBeamTrail
+      garnish_oam_flags[i] = sprite_oam_flags[k] | sprite_obj_prio[k];
       break;
     }
   }

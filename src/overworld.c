@@ -3439,6 +3439,44 @@ void Palette_AnimGetMasterSword3() {  // 8ef48c
   TS_copy = 0;
 }
 
+// "Fewer flashes (GBA)": the barrier of Ganon's Tower as on the GBA
+// (0x8132b10, 0x8132560). The SNES jumps to another row of kDwPaletteAnim2
+// every 4 frames; the GBA takes a new row (0-3) as the goal, and every other
+// frame moves the colors one step per channel: 32 steps towards the row made
+// brighter (+12 per channel), 32 steps back to the row, then the next row.
+// The last color (0x6f) is not in the goal: it only swells around its own
+// value. The GBA keeps counter and phase in its RAM; here they stay outside
+// the game's RAM
+static void Overworld_GbaTowerBarrier(void) {
+  static uint8 count, falling;
+  static uint16 goal[7];
+  if (!(count & 0x3f)) {
+    count += 0x41;
+    memcpy(goal, &kDwPaletteAnim2[(count >> 6) * 8], sizeof(goal));
+    return;
+  }
+  if (!(frame_counter & 1))
+    return;
+  for (int i = 0; i < 8; i++) {
+    uint16 t = i < 7 ? goal[i] : aux_palette_buffer[0x6f];
+    if (!falling) {
+      uint16 b = 0;
+      for (int sh = 0; sh < 15; sh += 5)
+        b |= IntMin((t >> sh & 31) + 12, 31) << sh;
+      t = b;
+    }
+    main_palette_buffer[0x68 + i] = GbaFlash_StepColor(main_palette_buffer[0x68 + i], t);
+  }
+  count++;
+  flag_update_cgram_in_nmi++;
+  if ((count & 0x3f) > 0x20) {
+    count &= 0xc0;
+    if (!falling)
+      count++;
+    falling = !falling;
+  }
+}
+
 void Overworld_DwDeathMountainPaletteAnimation() {  // 8ef582
   if (trigger_special_entrance)
     return;
@@ -3481,6 +3519,10 @@ void Overworld_DwDeathMountainPaletteAnimation() {  // 8ef582
   if (sc == 0x43 || sc == 0x45) {
     if (save_ow_event_info[0x43] & 0x20)
       return;
+    if (enhanced_features0 & kFeatures0_DimFlashesGba) {
+      Overworld_GbaTowerBarrier();
+      return;
+    }
     yy = (frame_counter & 0xc) * 2;
   }
   for (int i = 0; i < 8; i++)

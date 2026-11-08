@@ -22,6 +22,8 @@ bool Host_HasShader();
 uint32 Host_GetPpuRenderFlags();
 void Host_SetPpuRenderFlags(uint32 flags);
 void Host_ClearInputs();
+// game paused with the dimmed pause (HdMenu_Draw darkens the game, HUD and texts)
+bool Host_PauseDimmed();
 void Host_Quit();
 
 void HdMenu_ApplyConfig();

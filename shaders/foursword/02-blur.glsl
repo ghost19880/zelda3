@@ -1,4 +1,5 @@
 // PASS 2/3 - Sfoca le maschere (a meta' risoluzione): ombre e alone morbidi.
+// Il canale b (ombre di nuvole) passa com'e'.
 
 #pragma parameter FSA_SHADOW_SOFT "Morbidezza ombre" 1.60 0.50 3.00 0.05
 
@@ -24,7 +25,8 @@ void main()
             norm += wgt;
         }
     }
-    FragColor = vec4(sum / norm, 0.0, 1.0);
+    // b (nuvole) passa senza sfocatura: il bordo e' gia' morbido
+    FragColor = vec4(sum / norm, COMPAT_TEXTURE(Source, uv).b, 1.0);
 }
 
 #endif

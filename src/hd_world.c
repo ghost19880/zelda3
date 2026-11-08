@@ -2677,6 +2677,83 @@ static void MakeGuest(int k, int area) {
 enum { kThrownFrames = 64 };
 static uint8 g_thrown[16];
 
+static void GuestSendHome(int k);
+
+// Flyers that chase Link for ever: the Dark World raven (0x00 with sprite_A,
+// Sprite_Raven never stops attacking), the bees (0x79, Bee_Main) and the
+// awake vulture (0x01 state 1, circling). On the SNES they lived only on
+// Link's screen; with the continuous world they followed him across the whole
+// map. After kFlyerGiveUp frames with Link out of their home area they give
+// up and fly away (the raven with its own flight, the others straight away
+// from Link, the vulture rising), and once out of view (bird and shadow)
+// they go home (area enemies and guests) or vanish (bees from a hive or a
+// bush). Inside their area they behave as in the original
+enum { kFlyerGiveUp = 6 * 60 };
+static uint16 g_flyer_away[16];
+static int16 g_flyer_home[16];   // home area of a bee (where it was first seen)
+static uint8 g_flyer_type[16];   // sprite type seen last frame (0xff none)
+static bool g_flyer_left[16];    // gave up, flying away
+
+static bool FlyerChases(int k) {
+  uint8 t = sprite_type[k];
+  return (t == 0x00 && sprite_ai_state[k] == 2 && is_in_dark_world && sprite_A[k]) ||
+         (t == 0x79 && sprite_ai_state[k] == 1) || (t == 0x01 && sprite_ai_state[k] == 1);
+}
+
+// Home area (head) of flyer k, -1 if unknown
+static int FlyerHome(int k) {
+  if (IsAreaEnemy(k)) {
+    int hx, hy;
+    HomeOf(k, &hx, &hy);
+    return HeadAt(hx, hy);
+  }
+  if (IsMarkedCarried(k))
+    return carried_area[k] & 0x7f;
+  return g_flyer_home[k];
+}
+
+// True when k left the game (sent home or removed)
+static bool FlyerGiveUp(int k, int x, int y) {
+  if (sprite_state[k] != 9 || sprite_type[k] != g_flyer_type[k]) {
+    g_flyer_type[k] = sprite_state[k] ? sprite_type[k] : 0xff;
+    g_flyer_home[k] = sprite_state[k] ? HeadAt(x + 8, y + 8) : -1;
+    g_flyer_away[k] = 0, g_flyer_left[k] = false;
+    return false;
+  }
+  if (g_flyer_left[k]) {
+    if (sprite_type[k] == 0x00) {
+      sprite_ai_state[k] = 3;  // the raven's own flight
+    } else {
+      // bee (Bee_Main) and vulture (Sprite_01_Vulture, it also rises) keep
+      // their speed while sprite_delay_main runs: straight away from Link
+      sprite_delay_main[k] = 40;
+      if (sprite_type[k] == 0x01 && sprite_z[k] > 200)
+        sprite_z[k] = 200;  // (sprite_z is 8 bits)
+      ProjectSpeedRet pt = Sprite_ProjectSpeedTowardsLink(k, sprite_type[k] == 0x01 ? 32 : 24);
+      sprite_x_vel[k] = -pt.x, sprite_y_vel[k] = -pt.y;
+      sprite_oam_flags[k] = sprite_oam_flags[k] & ~0x40 | (sign8(-pt.x) ? 0 : 0x40);
+    }
+    if (InView(x, y - sprite_z[k], 32) || InView(x, y, 32))
+      return false;
+    g_flyer_left[k] = false;
+    if (g_carried[k])
+      GuestSendHome(k);
+    else if (IsAreaEnemy(k))
+      ResetEnemy(k);
+    else
+      sprite_state[k] = 0;
+    return true;
+  }
+  int home = FlyerHome(k);
+  if (!FlyerChases(k) || (home >= 0 && HeadAt(link_x_coord + 8, link_y_coord + 12) == home)) {
+    g_flyer_away[k] = 0;
+  } else if (++g_flyer_away[k] >= kFlyerGiveUp) {
+    g_flyer_away[k] = 0;
+    g_flyer_left[k] = true;
+  }
+  return false;
+}
+
 // Una volta per frame di gioco, nell'area corrente
 static void TrackMain(void) {
   GuestsCheck();
@@ -2701,6 +2778,8 @@ static void TrackMain(void) {
     else
       ChaseStep(&g_chase[k], g_chase_x[k], g_chase_y[k], x, y, link_x_coord, link_y_coord);
     g_chase_x[k] = x, g_chase_y[k] = y;
+    if (FlyerGiveUp(k, x, y))
+      continue;
     if (!IsMarkedCarried(k))
       carried_area[k] = 0;
   }
@@ -3076,8 +3155,11 @@ void HdWorld_BeforeRender(int width, int height) {
   // sprite poteva finire dietro a quelle con la priorita' alta e sparire (il
   // soldato che segue Link, respinto da una freccia oltre il bordo). I pezzi
   // che sporgono oltre il bordo si disegnano a parte, sopra alle immagini.
-  // (non nel menu: i suoi sprite vanno sopra all'HUD)
-  if (main_module_index != 9 || InMosaicTransition() || !mp->objXValid || !mp->objYValid ||
+  // Anche col mondo fermo sotto menu, mappa e dialoghi (InMenuOverWorld):
+  // Link sul bordo perdeva lo scudo aprendo il menu. Li' solo i pezzi di Link
+  // e dei nemici: quelli del menu vanno sopra all'HUD, non dietro
+  bool menu = main_module_index != 9;
+  if ((menu && !InMenuOverWorld()) || InMosaicTransition() || !mp->objXValid || !mp->objYValid ||
       (g_world_dx == 0 && g_world_dy == 0 && mp->extraLeftRight == 0))
     return;
   int ext = (width - 256) / 2;
@@ -3090,7 +3172,7 @@ void HdWorld_BeforeRender(int width, int height) {
   bool any = false;
   for (int i = 0; i < 128; i++) {
     sel[i] = false;
-    if (g_hidden[i])
+    if (g_hidden[i] || (menu && !g_link_oam_mask[i] && g_sprite_oam_owner[i] == 0xff))
       continue;
     int yy = mp->oam[i * 2] >> 8;
     if (yy == 0xf0 && !mp->objShowF0[i])

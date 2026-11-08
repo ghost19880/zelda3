@@ -7,6 +7,10 @@
 bool ZeldaIsPlayingMusicTrack(uint8 track);
 bool ZeldaIsPlayingMusicTrackWithBug(uint8 track);
 void ZeldaPlayMsuAudioTrack(uint8 track);
+bool ZeldaMsuHasTrack(uint8 track);
+int ZeldaMsuTrackPosMs(uint8 track);
+void ZeldaMsuSetStart(uint8 track, uint32 ms);
+void ZeldaSpcSkipFrames(int n);
 bool ZeldaIsMusicPlaying();
 
 void ZeldaEnableMsu(uint8 enable);

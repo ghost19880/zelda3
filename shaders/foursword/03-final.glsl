@@ -13,9 +13,7 @@
 #pragma parameter FSA_BRUSH_SCALE "Dimensione pennellate"        0.25 0.05 1.00 0.01
 #pragma parameter FSA_BRUSH_SKIP  "Macchie saltate (0-1)"        0.70 0.00 1.00 0.02
 #pragma parameter FSA_SHADOW      "Ombre morbide"                0.45 0.00 1.00 0.05
-#pragma parameter FSA_CLOUDS      "Ombre di nuvole (esterni)"    0.30 0.00 0.60 0.01
-#pragma parameter FSA_CLOUD_AMOUNT "Quante nuvole (0-1)"         1.00 0.00 1.00 0.05
-#pragma parameter FSA_CLOUD_WIND  "Velocita' nuvole (px/s)"     6.00 0.00 30.0 0.50
+#pragma parameter FSA_CLOUDS      "Ombre di nuvole (esterni)"    0.17 0.00 0.60 0.01
 #pragma parameter FSA_BLOOM       "Alone sulle zone chiare"      0.30 0.00 1.00 0.02
 #pragma parameter FSA_SATURATION  "Saturazione"                  0.96 0.50 2.00 0.02
 #pragma parameter FSA_CONTRAST    "Contrasto a S"                0.12 0.00 0.80 0.02
@@ -41,6 +39,9 @@ uniform COMPAT_PRECISION float MirrorDx[240];
 // 1 = "Filtro lineare" attivo nelle impostazioni (LinearFiltering): pixel
 // morbidi come senza shader invece che nitidi
 uniform COMPAT_PRECISION float LinearFilter;
+// White the game added to the whole scene (palettes going white, fixed color
+// added, flashes): 0-1, 0 with an old exe. The effects go under it.
+uniform COMPAT_PRECISION float WhiteFloor;
 
 #ifdef PARAMETER_UNIFORM
 uniform COMPAT_PRECISION float FSA_PIXEL_SHARP;
@@ -49,8 +50,6 @@ uniform COMPAT_PRECISION float FSA_BRUSH_SCALE;
 uniform COMPAT_PRECISION float FSA_BRUSH_SKIP;
 uniform COMPAT_PRECISION float FSA_SHADOW;
 uniform COMPAT_PRECISION float FSA_CLOUDS;
-uniform COMPAT_PRECISION float FSA_CLOUD_AMOUNT;
-uniform COMPAT_PRECISION float FSA_CLOUD_WIND;
 uniform COMPAT_PRECISION float FSA_BLOOM;
 uniform COMPAT_PRECISION float FSA_SATURATION;
 uniform COMPAT_PRECISION float FSA_CONTRAST;
@@ -63,9 +62,7 @@ uniform COMPAT_PRECISION float FSA_SKIP_MENUS;
 #define FSA_BRUSH_SCALE  0.25
 #define FSA_BRUSH_SKIP   0.70
 #define FSA_SHADOW       0.45
-#define FSA_CLOUDS       0.30
-#define FSA_CLOUD_AMOUNT 1.00
-#define FSA_CLOUD_WIND   6.00
+#define FSA_CLOUDS       0.17
 #define FSA_BLOOM        0.30
 #define FSA_SATURATION   0.96
 #define FSA_CONTRAST     0.12
@@ -233,102 +230,6 @@ float brush_marks(vec2 world)
     return m * (1.0 - skip);
 }
 
-// --- Ombre di nuvole ----------------------------------------------------------
-// Sagome da cartone animato, come in Four Swords: ogni nuvola e' un gruppo di
-// cerchi uniti, larga circa 250-310 pixel SNES, di tre tipi scelti a caso
-// (cumulo lungo, cumulo alto a cupola, nuvola bassa a due strati) e a volte
-// girata da destra a sinistra. Ogni nuvola
-// sta tutta dentro la sua casella, con posizione e misura a caso, e le righe
-// di caselle sono sfalsate a caso: due nuvole non si toccano mai.
-#define CLOUD_CELL vec2(345.0, 250.0)
-#define CLOUD_HALF vec2(112.0, 82.0)   // mezzo ingombro di una nuvola in scala 1
-#define CLOUD_GAP 18.0
-
-vec2 hash22(vec2 p)
-{
-    vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
-    q += dot(q, q.yzx + 33.33);
-    return fract((q.xx + q.yz) * q.zy);
-}
-
-// Distanza dal bordo di un lobo (cerchio di centro c e raggio r), con un po'
-// di variazione a caso di posizione e misura
-float cloud_lobe(vec2 p, vec2 seed, float k, vec2 c, float r, vec2 jitter)
-{
-    vec2 h = hash22(seed + vec2(k * 3.17, k * 1.31));
-    c += (h - 0.5) * jitter;
-    r *= mix(0.88, 1.12, fract(h.x * 5.3));
-    return length(p - c) - r;
-}
-
-float cloud_shape(vec2 p, vec2 seed)
-{
-    // p: posizione rispetto al centro della nuvola, in pixel SNES (scala 1)
-    vec2 kind = hash22(seed + vec2(17.9, 63.1));
-    if (kind.y < 0.5)
-        p.x = -p.x;
-    float d = 1e9;
-    if (kind.x < 0.34) {
-        // cumulo lungo: una fila di lobi, piu' grandi in mezzo
-        for (int k = 0; k < 7; k++) {
-            float fk = float(k) / 6.0;
-            float r = mix(36.0, 52.0, 1.0 - abs(fk - 0.5) * 2.0);
-            d = min(d, cloud_lobe(p, seed, float(k), vec2(mix(-58.0, 58.0, fk), 0.0), r, vec2(22.0, 44.0)));
-        }
-    } else if (kind.x < 0.67) {
-        // cumulo alto a cupola: un lobo grande in mezzo, due sopra e i lati
-        // che scendono, con la base quasi piatta
-        d = min(d, cloud_lobe(p, seed, 0.0, vec2(0.0, -8.0), 58.0, vec2(14.0, 10.0)));
-        d = min(d, cloud_lobe(p, seed, 1.0, vec2(-30.0, -40.0), 36.0, vec2(14.0, 10.0)));
-        d = min(d, cloud_lobe(p, seed, 2.0, vec2(26.0, -42.0), 34.0, vec2(14.0, 10.0)));
-        d = min(d, cloud_lobe(p, seed, 3.0, vec2(-56.0, 16.0), 40.0, vec2(14.0, 10.0)));
-        d = min(d, cloud_lobe(p, seed, 4.0, vec2(56.0, 14.0), 40.0, vec2(14.0, 10.0)));
-        d = min(d, cloud_lobe(p, seed, 5.0, vec2(-88.0, 32.0), 26.0, vec2(12.0, 8.0)));
-        d = min(d, cloud_lobe(p, seed, 6.0, vec2(88.0, 30.0), 28.0, vec2(12.0, 8.0)));
-        d = max(d, p.y - 52.0);
-    } else {
-        // nuvola bassa a due strati: sotto tanti lobi piccoli, sopra pochi
-        // lobi spostati da una parte
-        for (int k = 0; k < 6; k++) {
-            float fk = float(k) / 5.0;
-            d = min(d, cloud_lobe(p, seed, float(k), vec2(mix(-84.0, 84.0, fk), 22.0), 30.0, vec2(18.0, 12.0)));
-        }
-        for (int k = 0; k < 3; k++) {
-            float fk = float(k) / 2.0;
-            d = min(d, cloud_lobe(p, seed, float(k) + 7.0, vec2(mix(-62.0, 18.0, fk), -12.0), 36.0, vec2(18.0, 14.0)));
-        }
-    }
-    return 1.0 - smoothstep(-2.5, 2.5, d);
-}
-
-float cloud_in_cell(vec2 w, vec2 cell)
-{
-    vec2 h = hash22(cell + vec2(41.7, 7.3));
-    if (h.x > FSA_CLOUD_AMOUNT)
-        return 0.0;
-    float sc = mix(1.2, 1.4, h.y);
-    vec2 o = hash22(cell);
-    float shift = hash22(vec2(cell.y + 3.3, 9.1)).x * CLOUD_CELL.x;
-    vec2 room = max(CLOUD_CELL - 2.0 * CLOUD_HALF * sc - CLOUD_GAP, vec2(0.0));
-    vec2 center = cell * CLOUD_CELL + vec2(shift, 0.0) + CLOUD_GAP * 0.5 + CLOUD_HALF * sc + o * room;
-    return cloud_shape((w - center) / sc, cell);
-}
-
-float cloud_shadow(vec2 world, float t)
-{
-    vec2 w = world - FSA_CLOUD_WIND * t * vec2(0.92, 0.38);
-    float row = floor(w.y / CLOUD_CELL.y);
-    float acc = 0.0;
-    for (int j = -1; j <= 1; j++) {
-        float r = row + float(j);
-        float shift = hash22(vec2(r + 3.3, 9.1)).x * CLOUD_CELL.x;
-        float col = floor((w.x - shift) / CLOUD_CELL.x);
-        for (int i = -1; i <= 1; i++)
-            acc = max(acc, cloud_in_cell(w, vec2(col + float(i), r)));
-    }
-    return acc;
-}
-
 void main()
 {
     vec2 uv = vTexCoord;
@@ -345,7 +246,12 @@ void main()
     float menu = menu_amount();
 
     vec3 orig = LinearFilter > 0.5 ? sample_linear(uv, src) : sample_sharp(uv, src, FSA_PIXEL_SHARP);
-    vec3 color = orig;
+    // The scene without the white the game put on it: the effects work on
+    // this and the white goes back on top at the end, so shadows, clouds and
+    // brush strokes fade out with the scene instead of staying dark over it
+    float wf = clamp(WhiteFloor, 0.0, 0.98);
+    vec3 base = clamp((orig - wf) / (1.0 - wf), 0.0, 1.0);
+    vec3 color = base;
     float luma = dot(color, vec3(0.299, 0.587, 0.114));
 
     // --- Ombre morbide ------------------------------------------------
@@ -359,15 +265,20 @@ void main()
     color *= 1.0 - FSA_SHADOW * 0.55 * shadow * (1.0 - hud);
 
     // --- Ombre di nuvole (solo all'aperto) -------------------------------
-    float t = float(FrameCount) / 60.0;
-    float cloud = Sunny > 0.5 ? cloud_shadow(world, t) : 0.0;
+    // calcolate alla risoluzione SNES nel passaggio 1 (fsa_clouds.inc)
+    // (letto a meta' risoluzione: il bordo torna stretto come prima)
+    float cloud = Sunny > 0.5 ? smoothstep(0.2, 0.8, COMPAT_TEXTURE(Source, uv).b) : 0.0;
     color *= 1.0 - FSA_CLOUDS * cloud * (1.0 - hud);
 
     // --- Pennellate di Four Swords -------------------------------------------
-    float marks = brush_marks(world) * (1.0 - water_mask(uv, src));
-    // Piu' forti sui toni medi, quasi assenti sui neri e sui bianchi
-    float tone = smoothstep(0.03, 0.16, luma) * (1.0 - smoothstep(0.80, 1.00, luma));
-    color *= 1.0 - FSA_HATCH * 0.17 * marks * tone * scene;
+    // Come FSA: colore del fondale moltiplicato per la trama, su tutti i toni
+    // (niente sprite e HUD). In FSA la trama scurisce in media del 9%;
+    // 0.25 da' la stessa media con fsa_brush.png.
+    // Regola di FSA: la pennellata va solo sul fondale opaco; l'acqua e' uno
+    // strato semitrasparente (alfa < 255) e resta liscia (provato in Dolphin)
+    float marks = brush_marks(world);
+    float brushed = scene * (1.0 - water_mask(uv, src));
+    color *= max(1.0 - FSA_HATCH * 0.25 * marks * brushed, 0.0);
     color *= 1.0 + 0.04 * scene;  // il fondale di Four Swords e' un filo piu' chiaro
 
     // --- Alone sulle zone chiare ------------------------------------------
@@ -380,6 +291,9 @@ void main()
     color = mix(vec3(l), color, FSA_SATURATION);
     color = clamp(color, 0.0, 1.0);
     color = mix(color, color * color * (3.0 - 2.0 * color), FSA_CONTRAST);
+
+    // the game's white back on top (channels under it: left as they are)
+    color = orig + (1.0 - wf) * (color - base);
 
     // HUD e menu escono intatti; durante lo specchio l'effetto si schiarisce
     // insieme allo schermo (il gioco aggiunge il bianco dopo tutto il resto)

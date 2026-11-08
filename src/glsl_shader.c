@@ -14,6 +14,9 @@
 // collidono con i campi omonimi di _JUMP_BUFFER in <setjmp.h> e fanno fallire
 // la compilazione con MSVC. Bastano le poche voci qui sotto.
 extern uint8 g_ram[131072];
+// game frames run so far and interpolation of the drawn frame (zelda_rtl.c)
+extern int frame_ctr_dbg;
+extern float g_interp_alpha;
 #define ZELDA_BG2HOFS (*(uint16 *)(g_ram + 0xE2))
 #define ZELDA_BG2VOFS (*(uint16 *)(g_ram + 0xE8))
 // Registri veri (quelli che il gioco scrive nella PPU): nel prologo le stanze
@@ -379,8 +382,10 @@ static void GlslShader_GetUniforms(GlslShader *gs) {
     p->unif.ScrollOffset = glGetUniformLocation(program, "ScrollOffset");
     p->unif.GameModule = glGetUniformLocation(program, "GameModule");
     p->unif.Sunny = glGetUniformLocation(program, "Sunny");
+    p->unif.GameTime = glGetUniformLocation(program, "GameTime");
     p->unif.MirrorWarp = glGetUniformLocation(program, "MirrorWarp");
     p->unif.LinearFilter = glGetUniformLocation(program, "LinearFilter");
+    p->unif.WhiteFloor = glGetUniformLocation(program, "WhiteFloor");
     p->unif.MirrorDx = glGetUniformLocation(program, "MirrorDx");
     p->unif.LUTTexCoord = glGetAttribLocation(program, "LUTTexCoord");
     p->unif.VertexCoord = glGetAttribLocation(program, "VertexCoord");
@@ -605,6 +610,14 @@ static void GlslShader_SetShaderVars(GlslShader *gs, RenderCtx *ctx, int pass) {
     glUniform1f(p->unif.GameModule, (float)(ZeldaModuleForShader() + 1));
   if (p->unif.Sunny >= 0)
     glUniform1f(p->unif.Sunny, HdFx_SunnyOutdoors() ? 1.0f : 0.0f);
+  if (p->unif.GameTime >= 0) {
+    // Game time in seconds + 1 (0 = not set, old exe): it follows the game
+    // frames, not the drawn ones, so clouds keep pace with turbo, with pause
+    // and with screens above 60 Hz (the fraction is the interpolation between
+    // the last two game frames)
+    double t = (frame_ctr_dbg - 1 + (double)g_interp_alpha) / 60.0;
+    glUniform1f(p->unif.GameTime, (float)fmod(t, 3600.0 * 24.0) + 1.0f);
+  }
   if (p->unif.LinearFilter >= 0)
     // Filtro lineare (LinearFiltering): anche lo shader ammorbidisce i pixel
     glUniform1f(p->unif.LinearFilter, g_config.linear_filtering ? 1.0f : 0.0f);
@@ -616,6 +629,10 @@ static void GlslShader_SetShaderVars(GlslShader *gs, RenderCtx *ctx, int pass) {
     // e il lampo del temporale: le pennellate e le ombre si schiariscono
     // insieme al terreno invece di restare scure sopra il lampo
     glUniform1f(p->unif.MirrorWarp, fmaxf(fmaxf(HdWorld_WarpWhite(), ZeldaMosaicForShader()), HdFx_LightningWhite()));
+  if (p->unif.WhiteFloor >= 0)
+    // white the game added to the whole scene (HdFx_MeasureWhite): shadows,
+    // clouds and brush strokes go under it and fade out with the scene
+    glUniform1f(p->unif.WhiteFloor, HdFx_WhiteFloor());
   if (p->unif.MirrorDx >= 0)
     // e l'onda di ogni riga, che il fondale ha gia' (HdWorld_WarpPost)
     glUniform1fv(p->unif.MirrorDx, 240, HdWorld_WarpRowDx());

@@ -8,6 +8,7 @@
 #include "overworld.h"
 #include "player.h"
 #include "misc.h"
+#include "audio.h"
 #include "screens_it.h"
 #include "messaging.h"
 #include "player_oam.h"
@@ -465,6 +466,19 @@ void Module19_TriforceRoom() {  // 829fec
     break;
   case 14:  //
     if (!--INIDISP_copy) {
+      // The ending track opens with a chime and a pause: its melody (MSU 10.28 s,
+      // SPC 623 frames) arrived well into the castle scene, while on the GBA it
+      // starts with the scene. Jump to it as the scene begins.
+      int pos = ZeldaMsuTrackPosMs(33);
+      if (pos >= 0) {
+        if (pos < 10250) {
+          ZeldaMsuSetStart(33, 10250);
+          music_unk1 = 0;  // force the reopen
+          music_control = 33;
+        }
+      } else if (music_unk1 == 33) {
+        ZeldaSpcSkipFrames(270);  // 351 frames played since case 11, onset at 623
+      }
       main_module_index = 26;
       submodule_index = 0;
       subsubmodule_index = 0;
@@ -483,6 +497,7 @@ void Module19_TriforceRoom() {  // 829fec
     Link_HandleVelocity();
     Link_HandleMovingAnimation_FullLongEntry();
   }
+  sort_sprites_setting = 1;  // Link in OAM slots 56-67, before the triangles
   LinkOam_Main();
 }
 
@@ -727,6 +742,11 @@ void Intro_HandleAllTriforceAnimations() {  // 8cc404
 
 void Scene_AnimateEverySprite() {  // 8cc412
   intro_sprite_alloc = 0x800;
+  // Triforce room: the triangles go after Link in OAM (slots 68-115; Link uses
+  // 56-67, see Module19_TriforceRoom), so that Link holding the Triforce up is
+  // in front of it as on the GBA (there by priority: Link 1, triangles 2)
+  if (main_module_index == 25)
+    intro_sprite_alloc = 0x800 + 68 * 4;
   for (int k = 7; k >= 0; k--)
     Intro_AnimOneObj(k);
 }
@@ -1164,7 +1184,10 @@ void Intro_SpriteType_B_456(int k) {  // 8ccc13
     break;
   case 3:
   case 4:
-    if (triforce_ctr == 0) {
+    // GBA: the triangles go up 2 pixels 7 frames after Link has raised his
+    // arms (Module19 step 12 counts BYTE(R16) down from 0x80); here only when
+    // triforce_ctr ran out, 5 frames before the white
+    if (triforce_ctr == 0 || (main_module_index == 25 && subsubmodule_index == 12 && BYTE(R16) <= 0x7a)) {
       intro_y_lo[k] = kTriforce_Yfinal2[k];
     } else {
       triforce_ctr -= 1;
@@ -1934,8 +1957,13 @@ void Credits_HandleSceneFade() {  // 8e9a2a
   }
   }
 
+  // Scene lengths of the GBA version (ROM 0x1721b8; the last scene measured on
+  // the GBA, 0x520 plus its 28 frames more): the ending song lasts until the
+  // Triforce, while with the SNES lengths it was cut off 13 s before its end
+  static const uint16 kEnding_GbaSceneLength[16] = { 0x330, 0x300, 0x2c0, 0x2e0, 0x2c0, 0x2c0, 0x2c0, 0x2c0, 0x250, 0x250, 0x300, 0x2c0, 0x480, 0x480, 0x280, 0x53c };
+  (void)kEnding1_3_Tab0;  // the SNES lengths
   k = submodule_index >> 1;
-  if (R16 >= kEnding1_3_Tab0[k]) {
+  if (R16 >= kEnding_GbaSceneLength[k]) {
     if (!(R16 & 1) && !--INIDISP_copy)
       submodule_index++;
     else

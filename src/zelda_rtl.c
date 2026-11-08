@@ -679,6 +679,8 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
   HdWorld_Composite(pixel_buffer, (int)pitch, frame_w, height);
   HdWorld_WarpMask(pixel_buffer, (int)pitch, frame_w, height);
   HdFx_FadeMask(pixel_buffer, (int)pitch, frame_w, height);
+  // how white the game made the scene (for shadows and the shader)
+  HdFx_MeasureWhite(pixel_buffer, (int)pitch, frame_w, height);
 
   // Illuminazione dinamica (non sulla mappa del mondo in Mode 7)
   if (g_zenv.ppu->mode != 7) {

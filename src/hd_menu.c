@@ -1875,7 +1875,18 @@ void HdMenu_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   // fades in and out in 8 draws like the blur, not at once
   static int menu_dim;  // 0-8
   menu_dim = g_menu_open ? IntMin(menu_dim + 1, 8) : IntMax(menu_dim - 1, 0);
-  if (menu_dim) {
+  // Dimmed pause (P): game, HUD and texts keep 3/8 of their colour, and the
+  // options menu opened during the pause adds no darkening of its own: the
+  // game behind it stays as dark as the pause, the menu is drawn on top
+  bool pause_dim = Host_PauseDimmed();
+  if (pause_dim) {
+    for (int y = 0; y < height; y++) {
+      uint32 *row = (uint32 *)(pixels + y * pitch);
+      for (int x = 0; x < width; x++)
+        row[x] = ((row[x] >> 1 & 0x7f7f7f) - (row[x] >> 3 & 0x1f1f1f)) | (row[x] & 0xff000000);
+    }
+  }
+  if (menu_dim && !pause_dim) {
     // keep 1/2 of the colour with the blur, 1/4 without, at full darkening
     int keep = 256 - menu_dim * (g_config.fx_menu_blur ? 128 : 192) / 8;
     for (int y = 0; y < height; y++) {

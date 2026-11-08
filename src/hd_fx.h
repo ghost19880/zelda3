@@ -130,6 +130,9 @@ bool HdFx_LiveOverworld(void);
 bool HdFx_GameLoaded(void);
 // Labirinto in una fase diversa dal gioco (passaggi fra stanze, scale...)
 bool HdFx_DungeonPassing(void);
+// Warp tile (attribute 0x4b) of the dungeon room at world point wx, wy, on
+// either floor: animated and orange, but it is not lava
+bool HdFx_DungWarpAt(int wx, int wy);
 // Stanza le cui caselle sono in dung_bg2/dung_bg1 (e torce, oggetti): nei
 // passaggi (scale, scorrimenti, buche) il gioco cambia dungeon_room_index
 // prima di caricare la stanza nuova, e sullo schermo resta quella di prima.
@@ -183,6 +186,9 @@ uint16 HdFx_RealBg(const uint16 *pal, int i);
 int HdFx_OwShownEntry(int wx, int wy);
 void HdFx_FadeMask(uint8 *pixels, int pitch, int width, int height);
 void HdFx_FadePost(uint8 *pixels, int pitch, int width, int height);
+// White the game added to the whole scene (0-1): shadows go under it
+void HdFx_MeasureWhite(const uint8 *pixels, int pitch, int width, int height);
+float HdFx_WhiteFloor(void);
 // Mosaico del gioco anche sulle aggiunte HD (stessi quadrati della PPU)
 void HdFx_Mosaic(uint8 *pixels, int pitch, int width, int height);
 // Cielo e nuvole dietro la Piramide e sul Monte della Morte: lo shader non li dipinge
@@ -219,6 +225,11 @@ bool HdFx_IsCloudColor(uint16 e, int v);
 
 // After loading a quick save (zelda_rtl.c LoadSnesState)
 void HdFx_ResetAfterLoad(void);
+// Four Swords Adventures boomerang: the boomerang drawn at world (wx, wy) with
+// OAM tile and flags, flying speed pixels a frame; called every frame of
+// flight (hd_fx.c)
+int HdFx_BoomerangGhostDue(void);
+void HdFx_BoomerangGhost(int wx, int wy, int tile, uint8 flags);
 
 // Screen brightness of the frame being drawn (INIDISP, 0 = black or forced
 // blank): the PPU and the HD effects draw at 15 and the picture is dimmed at

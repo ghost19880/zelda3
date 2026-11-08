@@ -1724,6 +1724,21 @@ void Boomerang_Draw(int k) {  // 889338
     oam_cur_ptr = i + 0x800;
   }
   Ancilla_SetOam_Safe(GetOamCurPtr(), x, y, 0x26, kBoomerang_Flags[ancilla_G[k] * 4 + j] & ~0x30 | HIBYTE(oam_priority_value), 2);
+  // trail of fading copies as in Four Swords Adventures, while it flies or hovers
+  if (g_config.fsa_boomerang && !submodule_index && ancilla_aux_timer[k]) {
+    int n = HdFx_BoomerangGhostDue();
+    if (n >= 0) {
+      // the poses of the copies follow FSA, not our spin: there a copy comes
+      // every 4 frames and the pose changes every 3, so each copy is 4/3 of a
+      // pose ahead of the one before (poses 0, 1, 2, 0, 1, 2, ...)
+      static uint8 pose0;
+      if (n == 0)
+        pose0 = (uint8)j;
+      int p = (pose0 + (ancilla_S[k] ? -1 : 1) * (n * 4 / 3)) & 3;
+      HdFx_BoomerangGhost(Ancilla_GetX(k) + kBoomerang_Draw_XY[p * 2 + 1], Ancilla_GetY(k) + kBoomerang_Draw_XY[p * 2 + 0],
+                          0x26, kBoomerang_Flags[ancilla_G[k] * 4 + p]);
+    }
+  }
 }
 
 void Ancilla06_WallHit(int k) {  // 8893e8

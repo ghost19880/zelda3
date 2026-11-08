@@ -30,6 +30,7 @@ typedef struct MsuPlayer {
   FILE *f;
   uint32 buffer_size, buffer_pos;
   uint32 preskip, samples_until_repeat;
+  uint32 start_skip;  // opus: samples to drop after the first range header
   uint32 total_samples_in_file, repeat_position;
   uint32 cur_file_offs;
   MsuPlayerResumeInfo resume_info;
@@ -42,6 +43,9 @@ typedef struct MsuPlayer {
 } MsuPlayer;
 
 static MsuPlayer g_msu_player;
+// The next fresh open of this MSU track starts this many milliseconds into it.
+static uint8 g_msu_start_track;
+static uint32 g_msu_start_ms;
 
 static void MsuPlayer_Open(MsuPlayer *mp, int orig_track, bool resume_from_snapshot);
 
@@ -97,6 +101,38 @@ static uint8 RemapMsuDeluxeTrack(MsuPlayer *mp, uint8 track) {
   default:
     return track;
   }
+}
+
+static void MsuTrackName(MsuPlayer *mp, int actual_track, char *fname, size_t size) {
+  snprintf(fname, size, "%s%d.%s", g_config.msu_path ? g_config.msu_path : "", actual_track, mp->enabled & kMsuEnabled_Opuz ? "opuz" : "pcm");
+}
+
+// True when the track will be played by the MSU and not by the SPC.
+bool ZeldaMsuHasTrack(uint8 track) {
+  MsuPlayer *mp = &g_msu_player;
+  if (!mp->enabled)
+    return false;
+  char fname[256];
+  MsuTrackName(mp, RemapMsuDeluxeTrack(mp, track), fname, sizeof(fname));
+  FILE *f = fopen(fname, "rb");
+  if (f)
+    fclose(f);
+  return f != NULL;
+}
+
+// Position of the MSU track being played, in ms (-1 if another track or none).
+int ZeldaMsuTrackPosMs(uint8 track) {
+  MsuPlayer *mp = &g_msu_player;
+  if (mp->state < kMsuState_Resuming || mp->resume_info.orig_track != track)
+    return -1;
+  if (mp->opus)
+    return -1;
+  return (int)((uint64)mp->resume_info.offset * 1000 / 44100);
+}
+
+void ZeldaMsuSetStart(uint8 track, uint32 ms) {
+  g_msu_start_track = track;
+  g_msu_start_ms = ms;
 }
 
 bool ZeldaIsPlayingMusicTrack(uint8 track) {
@@ -193,7 +229,7 @@ static void MsuPlayer_Open(MsuPlayer *mp, int orig_track, bool resume_from_snaps
   if (actual_track == 0)
     return;
   char fname[256], buf[8];
-  snprintf(fname, sizeof(fname), "%s%d.%s", g_config.msu_path ? g_config.msu_path : "", actual_track, mp->enabled & kMsuEnabled_Opuz ? "opuz" : "pcm");
+  MsuTrackName(mp, actual_track, fname, sizeof(fname));
   printf("Loading MSU %s\n", fname);
   mp->f = fopen(fname, "rb");
   if (mp->f == NULL)
@@ -221,6 +257,12 @@ static void MsuPlayer_Open(MsuPlayer *mp, int orig_track, bool resume_from_snaps
   mp->range_repeat = mp->resume_info.range_repeat;
   mp->buffer_size = mp->buffer_pos = 0;
   mp->preskip = 0;
+  mp->start_skip = 0;
+  if (mp->state == kMsuState_Playing && g_msu_start_track == orig_track && g_msu_start_ms) {
+    mp->start_skip = (uint32)((uint64)g_msu_start_ms * (mp->enabled & kMsuEnabled_Opuz ? 48000 : 44100) / 1000);
+    mp->cur_file_offs = (file_tag == (('1' << 24) | ('U' << 16) | ('S' << 8) | 'M')) ? mp->start_skip : 0;
+  }
+  g_msu_start_track = 0, g_msu_start_ms = 0;
   if (file_tag == (('Z' << 24) | ('U' << 16) | ('P' << 8) | 'O')) {
     mp->opus = opus_decoder_create(48000, 2, NULL);
     if (!mp->opus)
@@ -230,6 +272,8 @@ static void MsuPlayer_Open(MsuPlayer *mp, int orig_track, bool resume_from_snaps
   } else if (file_tag == (('1' << 24) | ('U' << 16) | ('S' << 8) | 'M')) {
     fseek(mp->f, 0, SEEK_END);
     mp->total_samples_in_file = (ftell(mp->f) - 8) / 4;
+    if (mp->cur_file_offs >= mp->total_samples_in_file)
+      mp->cur_file_offs = 0;
     mp->samples_until_repeat = mp->total_samples_in_file - mp->cur_file_offs;
     fseek(mp->f, mp->cur_file_offs * 4 + 8, SEEK_SET);
   } else {
@@ -308,6 +352,12 @@ void MsuPlayer_Mix(MsuPlayer *mp, int16 *audio_buffer, int audio_samples) {
           uint16 preskip = *(uint32 *)&file_data[8];
           mp->samples_until_repeat = samples_until_repeat;
           mp->preskip = preskip & 0x3fff;
+          if (mp->start_skip) {
+            uint32 k = UintMin(mp->start_skip, samples_until_repeat - 1);
+            mp->preskip += k;
+            mp->samples_until_repeat -= k;
+            mp->start_skip = 0;
+          }
           if (preskip & 0x4000)
             mp->range_repeat = mp->range_cur;
           mp->range_cur = (preskip & 0x8000) ? mp->range_repeat : mp->range_cur + 10;
@@ -454,6 +504,17 @@ void ZeldaRenderAudio(int16 *audio_buffer, int samples, int channels) {
   dsp_getSamples(g_zenv.player->dsp, audio_buffer, samples, channels);
   if (g_msu_player.f && channels == 2)
     MsuPlayer_Mix(&g_msu_player, audio_buffer, samples);
+  ZeldaApuUnlock();
+}
+
+// Runs the SPC music forward by n frames without playing them.
+void ZeldaSpcSkipFrames(int n) {
+  int16 tmp[735 * 2];
+  ZeldaApuLock();
+  for (int i = 0; i < n; i++) {
+    SpcPlayer_GenerateSamples(g_zenv.player);
+    dsp_getSamples(g_zenv.player->dsp, tmp, 735, 2);
+  }
   ZeldaApuUnlock();
 }
 

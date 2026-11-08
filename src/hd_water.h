@@ -54,5 +54,8 @@ bool HdWater_IsTubColor(uint32 c);
 // anche loro come layer 7): li' l'acqua HD non si disegna e non si congela.
 // Vale anche per le aree vicine viste col mondo continuo. wx, wy: punto del mondo
 bool HdWater_IsSky(int wx, int wy);
+// Outdoor 8x8 tile entry (number, palette, flips) at world point wx, wy, also
+// in the neighbouring areas with the continuous world; -1 if unknown
+int HdWater_OwEntry(int wx, int wy);
 
 #endif  // ZELDA3_HD_WATER_H_

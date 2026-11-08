@@ -2258,7 +2258,7 @@ void GbaFlash_DimHold(uint8 v) {
     g_gba_dim_timer = v;
 }
 
-static uint16 GbaFlash_StepColor(uint16 c, uint16 t) {
+uint16 GbaFlash_StepColor(uint16 c, uint16 t) {
   for (int sh = 0; sh < 15; sh += 5) {
     int a = c >> sh & 31, b = t >> sh & 31;
     a += a < b ? 1 : a > b ? -1 : 0;

@@ -16,6 +16,7 @@
 #include "hd_water.h"
 #include "tagalong.h"
 #include "ancilla.h"
+#include "sprite.h"
 
 const uint16 *Dungeon_GetObjectTiles(int subtype, int idx);
 
@@ -90,6 +91,11 @@ bool HdFx_InGameplay(int *mod_out) {
   *mod_out = mod;
   if (InAgahnimWave())
     return false;
+  // ending (26), even steps: the next place is being loaded with the screen
+  // black, and its tile map still holds the previous place (a room's tiles
+  // read as outdoor map16 numbers went past the end of the map8 table)
+  if (main_module_index == 26 && submodule_index < 32 && !(submodule_index & 1))
+    return false;
   return mod == 7 || mod == 9 || mod == 11;
 }
 
@@ -141,7 +147,11 @@ static void ClassifyCells(const uint8 *pixels, int pitch, int width, int height,
   g_cells_h = IntMin((height + 7) / 8, kMaxCellsY);
   g_any_lava = false;
   memset(g_cells, 0, sizeof(g_cells));
-  if (ppu->mode != 1 || !animated_tile_vram_addr)
+  // Lava is only indoors: outdoors the animated tiles are water, shore
+  // ripples and flowers, and the brown stumps in the Dark World swamp
+  // (846339) passed HdFx_IsLavaRgb, so the heat haze bent the water edge
+  // around them and the HD water turned it into a moving light strip
+  if (ppu->mode != 1 || !animated_tile_vram_addr || !player_is_indoors)
     return;
   for (int layer = 0; layer < 2; layer++) {
     // Tile animati del fondale: 32 caratteri caricati all'indirizzo
@@ -159,6 +169,8 @@ static void ClassifyCells(const uint8 *pixels, int pitch, int width, int height,
           continue;
         uint32 c = ((const uint32 *)(pixels + sy * pitch))[sx];
         if (HdFx_IsHudOrSprite(c))
+          continue;
+        if (HdFx_DungWarpAt(sx - ext + BG2HOFS_copy2 + bias_x, sy + 1 + BG2VOFS_copy2 + bias_y))
           continue;
         if (HdFx_IsLavaRgb((c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff))
           g_cells[cy][cx] = kCellLava, g_any_lava = true;
@@ -224,9 +236,132 @@ static void ApplyHeatHaze(uint8 *pixels, int pitch, int width, int height, int c
   }
 }
 
+// ---------------------------------------------------------------------------
+// Boomerang trail as in Four Swords Adventures (FsaBoomerang): the boomerang
+// leaves copies of itself, frozen in the pose of that moment and fixed in the
+// world, that fade out evenly. Values from the FSA code (main.dol, afterimage
+// type 17 used by the boomerang): a copy every 4 frames, each one lasting 20
+// frames, the sprite colours brightened by 127 per channel, alpha 191/255
+// fading linearly to 0; copies are made while it hovers as well. The FSA
+// boomerang flies 6 pixels a frame (9 the upgraded one), ours 2 (3 the magic
+// one): exactly 3 times slower, so every time is 3 times longer (a copy every
+// 12 frames, 60 frames of life) and the copies are as far apart and the trail
+// as long as in FSA (24 / 36 pixels apart, 120 / 180 pixels of trail).
+enum { kBoomGhosts = 10, kBoomGhostPeriod = 4 * 3, kBoomGhostLife = 20 * 3, kBoomGhostFirst = 4 };
+
+typedef struct BoomGhost {
+  int16 x, y;           // world position of the top left corner
+  uint8 age;
+  bool on;
+  uint16 col[16 * 16];  // 0 = transparent, else 0x8000 | BGR555 of the sprite pixel
+} BoomGhost;
+
+static BoomGhost g_boom_ghost[kBoomGhosts];
+static uint8 g_boom_ghost_frame, g_boom_ghost_seen;
+static int g_boom_ghost_timer, g_boom_ghost_count;
+
+// Called every frame while the boomerang flies: the number of the copy due in
+// this frame within the throw (0 = the first one), or -1 when none is due
+int HdFx_BoomerangGhostDue(void) {
+  // a new throw (not seen in the last frames): the first copy comes after
+  // kBoomGhostFirst frames, just off Link's hand
+  if ((uint8)(frame_counter - g_boom_ghost_seen) > 2)
+    g_boom_ghost_timer = kBoomGhostPeriod - kBoomGhostFirst, g_boom_ghost_count = 0;
+  g_boom_ghost_seen = frame_counter;
+  if (++g_boom_ghost_timer < kBoomGhostPeriod)
+    return -1;
+  g_boom_ghost_timer = 0;
+  return g_boom_ghost_count++;
+}
+
+void HdFx_BoomerangGhost(int wx, int wy, int tile, uint8 flags) {
+  BoomGhost *g = &g_boom_ghost[0];
+  for (int i = 0; i < kBoomGhosts; i++) {
+    BoomGhost *t = &g_boom_ghost[i];
+    if (!t->on) {
+      g = t;
+      break;
+    }
+    if (t->age > g->age)
+      g = t;
+  }
+  // the 16x16 sprite read from the VRAM as the PPU draws it (flips included)
+  const Ppu *ppu = g_zenv.ppu;
+  int adr = (flags & 1) ? ppu->objTileAdr2 : ppu->objTileAdr1;
+  int pal = 0x80 + 16 * (flags >> 1 & 7);
+  bool any = false;
+  for (int r = 0; r < 16; r++) {
+    int sr = (flags & 0x80) ? 15 - r : r;
+    for (int c = 0; c < 16; c++) {
+      int sc = (flags & 0x40) ? 15 - c : c;
+      int used = ((((tile & 0xff) >> 4) + (sr >> 3)) << 4) | (((tile & 0xf) + (sc >> 3)) & 0xf);
+      const uint16 *a = &ppu->vram[(adr + used * 16 + (sr & 7)) & 0x7fff];
+      int v = HdFx_Pixel4bpp(a[0], a[8], 7 - (sc & 7));
+      uint16 col = 0;
+      if (v) {
+        col = 0x8000 | ppu->cgram[pal + v];
+        any = true;
+      }
+      g->col[r * 16 + c] = col;
+    }
+  }
+  g->x = (int16)wx, g->y = (int16)wy;
+  g->age = 0;
+  g->on = any;
+}
+
+static void DrawBoomerangGhosts(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y) {
+  // the copies age with the game frames (not while the game is paused)
+  bool step = g_boom_ghost_frame != frame_counter;
+  g_boom_ghost_frame = frame_counter;
+  int order[kBoomGhosts], n = 0;
+  for (int i = 0; i < kBoomGhosts; i++) {
+    BoomGhost *g = &g_boom_ghost[i];
+    if (g->on && step && ++g->age >= kBoomGhostLife)
+      g->on = false;
+    if (!g->on)
+      continue;
+    // youngest first: the copies become sprite pixels, so where two overlap
+    // the newer one stays in front
+    int j = n++;
+    for (; j > 0 && g_boom_ghost[order[j - 1]].age > g->age; j--)
+      order[j] = order[j - 1];
+    order[j] = i;
+  }
+  int ext = (width - 256) / 2;
+  int cam_x = BG2HOFS_copy2 + bias_x, cam_y = BG2VOFS_copy2 + bias_y;
+  for (int o = 0; o < n; o++) {
+    BoomGhost *g = &g_boom_ghost[order[o]];
+    // alpha 191/255 when new (FSA), fading out evenly
+    float a = (191.0f / 255.0f) * (kBoomGhostLife - g->age) / kBoomGhostLife;
+    int sx = g->x - cam_x + ext, sy = g->y - cam_y;
+    for (int r = 0; r < 16; r++) {
+      int y = sy + r;
+      if (y < 0 || y >= height)
+        continue;
+      uint32 *row = (uint32 *)(pixels + y * pitch);
+      for (int c = 0; c < 16; c++) {
+        int x = sx + c;
+        uint16 col = g->col[r * 16 + c];
+        if (!col || x < 0 || x >= width || HdFx_IsHudOrSprite(row[x]))
+          continue;
+        // the sprite colour plus 127 per channel (FSA), drawn after the lights
+        // and marked as a sprite (layer 4): neither the light nor the Four
+        // Swords shader changes it
+        int cr = IntMin((col & 31) * 255 / 31 + 127, 255);
+        int cg = IntMin((col >> 5 & 31) * 255 / 31 + 127, 255);
+        int cb = IntMin((col >> 10 & 31) * 255 / 31 + 127, 255);
+        row[x] = (HdFx_MixRgb(row[x], cr, cg, cb, a) & 0xffffff) | 4u << 24;
+      }
+    }
+  }
+}
+
 void HdFx_BeforeLight(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y) {
   int mod;
-  if (!g_config.fx_heat || !HdFx_InGameplay(&mod))
+  if (!HdFx_InGameplay(&mod))
+    return;
+  if (!g_config.fx_heat)
     return;
   ClassifyCells(pixels, pitch, width, height, bias_x, bias_y);
   if (g_any_lava)
@@ -239,7 +374,7 @@ void HdFx_BeforeLight(uint8 *pixels, int pitch, int width, int height, int bias_
 typedef struct Particle {
   float x, y, vx, vy;
   uint16 age, life;
-  uint8 kind;  // 0 = brace, 1 = pulviscolo, 2 = spruzzo di pioggia, 3 = fumo dell'incendio, 4 = bagliore di un vortice
+  uint8 kind;  // 0 = brace, 1 = pulviscolo, 2 = spruzzo di pioggia, 3 = fumo dell'incendio, 4 = bagliore di un vortice, 5 = scintilla di un portale
   int8 dir;    // brace di una torcia: a sinistra (-1) o a destra (1) dalle pareti laterali, in basso (2) dalla parete sud
 } Particle;
 
@@ -264,7 +399,7 @@ static void UpdateParticles() {
     p->x += p->vx, p->y += p->vy;
     if (p->kind == 0 && (p->dir == -1 || p->dir == 1))
       p->vy += (Rand01() - 0.5f) * 0.06f;  // di lato ondeggiano in su e in giu'
-    else if (p->kind == 0 || p->kind == 4)
+    else if (p->kind == 0 || p->kind == 4 || p->kind == 5)
       p->vx += (Rand01() - 0.5f) * 0.06f;  // le braci ondeggiano salendo
     else if (p->kind == 1)
       p->vx += (Rand01() - 0.5f) * 0.01f, p->vy += (Rand01() - 0.5f) * 0.01f;
@@ -308,6 +443,9 @@ static void DrawParticles(uint8 *pixels, int pitch, int width, int height, int c
     } else if (p->kind == 4) {
       // bagliore magico di un vortice: come una brace, ma bianco azzurrino
       DrawSpark(c, pitch, FadeInOut(k), 255, 255, 255, 170 + 40 * k, 200 + 20 * k, 255);
+    } else if (p->kind == 5) {
+      // portal spark: warm white core, golden halo
+      DrawSpark(c, pitch, FadeInOut(k), 255, 252, 235, 255, 215 - 30 * k, 120 - 40 * k);
     } else if (p->kind == 1) {
       // pulviscolo nella luce: compare e scompare lentamente
       float a = sinf(k * 3.14159f) * 0.45f;
@@ -434,6 +572,151 @@ static void SpawnWhirlpoolSparkles() {
 }
 
 // ---------------------------------------------------------------------------
+// Warp tiles (attribute 0x4b, 16x16 blocks): a soft glow on the ground that
+// breathes slowly and a few sparks. Outdoors (portals between the worlds,
+// blue) the glow is blue with blue-white sparks, in the dungeons (yellow
+// tiles) golden. Drawn on the frame (no sprites), only behind the sprites
+
+enum { kMaxPortals = 8 };
+static int g_portal_x[kMaxPortals], g_portal_y[kMaxPortals];  // world center
+static int g_num_portals;
+static bool g_portals_gold;  // dungeon warp tiles
+
+bool HdFx_DungWarpAt(int wx, int wy) {
+  int pos = HdWater_DungPos(wx, wy);
+  return HdWater_DungAttr(pos, wx, wy) == 0x4b || HdWater_DungAttr(pos + 0x1000, wx, wy) == 0x4b;
+}
+
+// Dungeon warp tiles near the screen: top-left cell of each block
+static void FindDungeonPortals(int cam_x, int cam_y, int ext, int width, int height) {
+  int room = HdFx_LoadedRoom();
+  int ox = (room & 15) << 9, oy = (room >> 4 & 15) << 9;
+  for (int row = 0; row < 64; row++) {
+    int wy = oy + row * 8;
+    if (wy < cam_y - 16 || wy > cam_y + height + 16)
+      continue;
+    for (int col = 0; col < 64 && g_num_portals < kMaxPortals; col++) {
+      int wx = ox + col * 8;
+      if (wx < cam_x - ext - 16 || wx > cam_x - ext + width + 16 || !HdFx_DungWarpAt(wx, wy))
+        continue;
+      if ((col > 0 && HdFx_DungWarpAt(wx - 8, wy)) || (row > 0 && HdFx_DungWarpAt(wx, wy - 8)))
+        continue;
+      g_portal_x[g_num_portals] = wx + 8, g_portal_y[g_num_portals] = wy + 8;
+      g_num_portals++;
+    }
+  }
+}
+
+static bool IsPortalAt(const uint8 *attr8, int wx, int wy) {
+  int e = HdWater_OwEntry(wx, wy);
+  return e >= 0 && attr8[e & 0x1ff] == 0x4b;
+}
+
+static void FindPortals(int cam_x, int cam_y, int ext, int width, int height) {
+  g_num_portals = 0;
+  g_portals_gold = player_is_indoors;
+  if (player_is_indoors) {
+    FindDungeonPortals(cam_x, cam_y, ext, width, height);
+    return;
+  }
+  if (overworld_screen_index >= 0x80)
+    return;
+  const uint8 *attr8 = GetMap8toTileAttr();
+  int x0 = (cam_x - ext - 16) & ~15, y0 = (cam_y - 16) & ~15;
+  for (int wy = y0; wy < cam_y + height + 16; wy += 16) {
+    for (int wx = x0; wx < cam_x - ext + width + 16; wx += 16) {
+      if (g_num_portals < kMaxPortals && IsPortalAt(attr8, wx, wy) && IsPortalAt(attr8, wx + 8, wy + 8)) {
+        g_portal_x[g_num_portals] = wx + 8, g_portal_y[g_num_portals] = wy + 8;
+        g_num_portals++;
+      }
+    }
+  }
+}
+
+// Once per game frame: portals on screen and their sparks
+// Area changes and warps (submodule != 0) have no portal glow; the ending
+// scenes (HdFx_EndingScene) always run with a submodule and show it
+static bool PortalsPaused(void) {
+  return submodule_index && !HdFx_EndingScene();
+}
+
+static void StepPortals(int cam_x, int cam_y, int ext, int width, int height) {
+  if (PortalsPaused()) {
+    g_num_portals = 0;  // area changes and warps: no glow, no sparks
+    return;
+  }
+  FindPortals(cam_x, cam_y, ext, width, height);
+  for (int i = 0; i < g_num_portals; i++) {
+    Particle *p;
+    if (Rand01() >= 0.06f || !(p = NewParticle()))
+      continue;
+    p->kind = g_portals_gold ? 5 : 4;
+    p->life = 35 + (int)(Rand01() * 30);
+    p->x = g_portal_x[i] + (Rand01() - 0.5f) * 14;
+    p->y = g_portal_y[i] + 2 + (Rand01() - 0.5f) * 10;
+    p->vx = (Rand01() - 0.5f) * 0.2f;
+    p->vy = -0.35f * (0.6f + Rand01() * 0.6f);
+  }
+}
+
+// Soft elliptical glow on the ground around each portal, breathing slowly
+static void ApplyPortals(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext) {
+  if (PortalsPaused())
+    return;
+  const float rx = 22, ry = 16;
+  float a = 0.26f + 0.16f * (0.5f + 0.5f * sinf(g_fx_frames * 0.06f));
+  for (int i = 0; i < g_num_portals; i++) {
+    float cx = (float)(g_portal_x[i] - cam_x + ext), cy = (float)(g_portal_y[i] - cam_y);
+    int x0 = IntMax((int)(cx - rx), 0), x1 = IntMin((int)(cx + rx) + 1, width - 1);
+    int y0 = IntMax((int)(cy - ry), 0), y1 = IntMin((int)(cy + ry) + 1, height - 1);
+    for (int y = y0; y <= y1; y++) {
+      uint32 *row = (uint32 *)(pixels + y * pitch);
+      for (int x = x0; x <= x1; x++) {
+        float dx = (x + 0.5f - cx) / rx, dy = (y + 0.5f - cy) / ry;
+        float d2 = dx * dx + dy * dy;
+        if (d2 >= 1 || HdFx_IsHudOrSprite(row[x]))
+          continue;
+        if (g_portals_gold)
+          AddColor(&row[x], 255, 205, 100, a * (1 - d2) * (1 - d2));
+        else
+          AddColor(&row[x], 100, 155, 255, a * (1 - d2) * (1 - d2));
+      }
+    }
+  }
+}
+
+// The hobo's campfire under the bridge (sprite 0x2b, sprite_subtype2 2): a
+// warm halo that flickers like a flame, drawn on the frame because in
+// daylight the light of hd_light.c barely shows; behind the sprites
+static void ApplyCampfireGlow(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext) {
+  for (int k = 0; k < 16; k++) {
+    if (sprite_type[k] != 0x2b || sprite_state[k] != 9 || sprite_subtype2[k] != 2)
+      continue;
+    float tf = g_fx_frames * 0.105f;
+    float pulse = 0.82f + 0.12f * sinf(tf * 1.6f + k) + 0.06f * sinf(tf * 4.1f + k * 2.0f);
+    float cx = (float)(Sprite_GetX(k) + 8 - cam_x + ext), cy = (float)(Sprite_GetY(k) + 10 - cam_y);
+    float rx = 34 * (0.94f + 0.06f * pulse), ry = rx * 0.8f, a = 0.42f * pulse;
+    // the logs are background tiles: the 16x16 block under the flame (screen
+    // row 0 is background row 1); its brown pixels stay unlit, the grass not
+    int lx = ((Sprite_GetX(k) + 4) & ~15) - cam_x + ext, ly = ((Sprite_GetY(k) + 8) & ~15) - cam_y - 1;
+    int x0 = IntMax((int)(cx - rx), 0), x1 = IntMin((int)(cx + rx) + 1, width - 1);
+    int y0 = IntMax((int)(cy - ry), 0), y1 = IntMin((int)(cy + ry) + 1, height - 1);
+    for (int y = y0; y <= y1; y++) {
+      uint32 *row = (uint32 *)(pixels + y * pitch);
+      for (int x = x0; x <= x1; x++) {
+        float dx = (x + 0.5f - cx) / rx, dy = (y + 0.5f - cy) / ry;
+        float d2 = dx * dx + dy * dy;
+        if (d2 >= 1 || HdFx_IsHudOrSprite(row[x]))
+          continue;
+        if (x >= lx && x < lx + 16 && y >= ly && y < ly + 16 && (row[x] >> 16 & 0xff) >= (row[x] >> 8 & 0xff))
+          continue;
+        AddColor(&row[x], 255, 150, 60, a * (1 - d2) * (1 - d2));
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 3. Raggi di luce e pulviscolo dalle finestre
 
 static bool IsLightTile(const uint16 *light, uint16 v) {
@@ -487,6 +770,25 @@ static void ScanShafts(int layer, bool floor, const uint16 *light, int pal) {
 // La luce di una finestra ("Window Light", oggetto 0x70 del terzo gruppo) e'
 // una zona rettangolare di tile di luce, spesso tutti uguali: ogni zona
 // (angolo in alto a sinistra senza luce a sinistra e sopra) diventa un fascio.
+// BG1 moving on its own in this room (Trinexx's body is drawn on BG1, as are
+// moving floors): its tiles are not the room's, some of them have the same
+// numbers as the window light tiles and a shaft appeared on the boss. Once the
+// BG1 - BG2 offset changes in a room, BG1 has no windows there
+static int g_bg1_dx, g_bg1_dy, g_bg1_room = -1;
+static bool g_bg1_moves;
+
+static void TrackMovingBg1(int room) {
+  int dx = BG1HOFS_copy2 - BG2HOFS_copy2, dy = BG1VOFS_copy2 - BG2VOFS_copy2;
+  if (g_bg1_room != room) {
+    g_bg1_room = room, g_bg1_moves = false;
+    g_bg1_dx = dx, g_bg1_dy = dy;
+  } else if (HdFx_DungeonPassing()) {
+    g_bg1_dx = dx, g_bg1_dy = dy;  // passing between rooms: both layers scroll
+  } else if ((dx != g_bg1_dx || dy != g_bg1_dy)) {
+    g_bg1_moves = true;
+  }
+}
+
 static void ScanWindows() {
   g_num_shafts = 0;
   g_shaft_room = HdFx_LoadedRoom();
@@ -495,12 +797,14 @@ static void ScanWindows() {
   for (int i = 0; i < 16; i++)
     light[i] = src[i];
   for (int layer = 0; layer < 2; layer++)
-    ScanShafts(layer, false, light, 0);
+    if (layer == 0 || !g_bg1_moves)
+      ScanShafts(layer, false, light, 0);
   // Luce sul pavimento (oggetto 0x70 + 1, es. Villaggio dei Ladroni): un
   // riquadro con l'angolo 0x144 in alto a sinistra, illuminato da sopra
   int pal = (Dungeon_GetObjectTiles(3, 0x71)[0] >> 10) & 7;
   for (int layer = 0; layer < 2; layer++)
-    ScanShafts(layer, true, light, pal);
+    if (layer == 0 || !g_bg1_moves)
+      ScanShafts(layer, true, light, pal);
 }
 
 // Brighter streaks of a light shaft, slowly flickering (rx: column in the shaft)
@@ -552,7 +856,9 @@ static void ApplyFloorShaft(uint8 *pixels, int pitch, int width, int height, flo
 
 static void ApplyWindowRays(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext, bool spawn) {
   int room = HdFx_LoadedRoom();
-  if (g_shaft_room != room || --g_shaft_timer <= 0) {
+  bool moved = g_bg1_moves;
+  TrackMovingBg1(room);
+  if (g_shaft_room != room || --g_shaft_timer <= 0 || moved != g_bg1_moves) {
     ScanWindows();
     g_shaft_timer = 30;
   }
@@ -667,6 +973,27 @@ static bool CrystalCutsceneOn(void) {
     if (dung_bg1[kCrystalPos[i] >> 1] == 0x1f80)
       return true;
   return false;
+}
+
+// Trinexx's body (sprite 0xcb) is drawn by the game on BG1, which in its room
+// holds nothing else: for the Four Swords shader it was ground and got the
+// still brush strokes of the floor while the body moved over them. While
+// Trinexx is there its BG1 pixels (layer 0) count as a sprite (layer 4), like
+// its heads
+static void TrinexxBodyAsSprite(uint8 *pixels, int pitch, int width, int height) {
+  if (!player_is_indoors)
+    return;
+  bool trinexx = false;
+  for (int k = 0; k < 16 && !trinexx; k++)
+    trinexx = sprite_state[k] && sprite_type[k] == 0xcb;
+  if (!trinexx)
+    return;
+  for (int y = 0; y < height; y++) {
+    uint32 *row = (uint32 *)(pixels + y * pitch);
+    for (int x = 0; x < width; x++)
+      if ((row[x] >> 24) == 0)
+        row[x] = (row[x] & 0x00ffffff) | 4u << 24;
+  }
 }
 
 // Il cristallo dei labirinti (a terra, sollevato da Link e mentre sale) e i
@@ -1486,6 +1813,7 @@ void HdFx_AfterLight(uint8 *pixels, int pitch, int width, int height, int bias_x
     g_num_particles = 0;
     return;
   }
+  DrawBoomerangGhosts(pixels, pitch, width, height, bias_x, bias_y);
   int ext = (width - 256) / 2;
   int cam_x = BG2HOFS_copy2 + bias_x, cam_y = BG2VOFS_copy2 + bias_y;
   bool step = NewGameFrame();
@@ -1496,6 +1824,10 @@ void HdFx_AfterLight(uint8 *pixels, int pitch, int width, int height, int bias_x
       SpawnEmbers(cam_x, cam_y, ext);
     if (g_config.fx_whirlpool && mod == 9)
       SpawnWhirlpoolSparkles();
+    if (g_config.fx_heat && (mod == 9 || mod == 7))
+      StepPortals(cam_x, cam_y + 1, ext, width, height);
+    else
+      g_num_portals = 0;
   }
   // window light, ice and scorch sit on background tiles: screen row 0 is
   // background row 1 (HdWorld_Composite); sprites and particles have no +1
@@ -1504,8 +1836,13 @@ void HdFx_AfterLight(uint8 *pixels, int pitch, int width, int height, int bias_x
   if (g_config.fx_item_glow)
     ApplyItemGlow(pixels, pitch, width, height, cam_x, cam_y, ext);
   KeepCrystalUnpainted(pixels, pitch, width, height, cam_x, cam_y, ext);
+  TrinexxBodyAsSprite(pixels, pitch, width, height);
   if (mod == 9)
     ApplyBurning(pixels, pitch, width, height, cam_x, cam_y + 1, ext, step);
+  if (g_config.fx_heat && (mod == 9 || mod == 7))
+    ApplyPortals(pixels, pitch, width, height, cam_x, cam_y + 1, ext);
+  if (g_config.fx_heat && mod == 11)
+    ApplyCampfireGlow(pixels, pitch, width, height, cam_x, cam_y, ext);
   DrawParticles(pixels, pitch, width, height, cam_x, cam_y, ext);
   if (g_config.fx_rain && IsRaining(mod)) {
     ApplyRain(pixels, pitch, width, height, cam_x, cam_y, ext, step);
@@ -1725,6 +2062,7 @@ void HdFx_Fog(uint8 *pixels, int pitch, int width, int height, int bias_x, int b
 // entrano nella media, cosi' i riquadri non "sbavano" sul gioco.
 
 bool HdMenu_IsOpen();
+bool Host_PauseDimmed();
 
 static int32 *g_blur_buf, *g_blur_tmp;
 static int g_blur_cap;
@@ -1862,7 +2200,8 @@ void HdFx_MenuBlur(uint8 *pixels, int pitch, int width, int height) {
   const int32 *acc = BlurRect(pixels, pitch, 0, 0, width, height);
   if (!acc)
     return;
-  float keep = 1.0f - amount, dark = 1.0f - 0.30f * amount;
+  // during the dimmed pause the darkening is the pause one (HdMenu_Draw)
+  float keep = 1.0f - amount, dark = Host_PauseDimmed() ? 1.0f : 1.0f - 0.30f * amount;
   for (int y = 0; y < height; y++) {
     uint32 *row = (uint32 *)(pixels + y * pitch);
     const int32 *b = acc + y * width * 4;
@@ -2079,6 +2418,63 @@ void HdFx_FadePost(uint8 *pixels, int pitch, int width, int height) {
       row[x] = (c & 0xff000000) | g_fade_map[c >> 16 & 255] << 16 | g_fade_map[c >> 8 & 255] << 8 | g_fade_map[c & 255];
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// White lift of the scene, whatever the game uses for it (palettes going
+// white, fixed color added by color math, palette flashes): every scenery
+// pixel gets at least that much white, so the darkest one on screen tells how
+// much. Shadows, cloud shadows and brush strokes (HD and shader) are put under
+// that white, c = w + (c - w) * k, and fade out together with the scene
+// instead of staying dark on top of it. Measured on the PPU frame, before the
+// HD additions (which are darker). The mirror and the lightning have their
+// own value (MirrorWarp): there the PPU draws the real colors.
+static int g_white_floor;  // 0-255
+
+void HdFx_MeasureWhite(const uint8 *pixels, int pitch, int width, int height) {
+  enum { kNaturalDark = 40 };  // anything this dark on screen: a normal scene
+  // only the part the PPU draws (as ClearHiddenBands in zelda_rtl.c): the
+  // bands the game leaves empty (4:3 scenes such as the Triforce room) are
+  // black and are not scenery
+  Ppu *ppu = g_zenv.ppu;
+  int x0 = 0, x1 = width, y1 = height;
+  if (ppu->mode != 7 && !HdWorld_Active()) {
+    int ext = (width - 256) / 2;
+    x0 = IntMax(ext - ppu->extraLeftCur, 0), x1 = IntMin(ext + 256 + ppu->extraRightCur, width);
+    y1 = IntMin(224 + ppu->extraBottomCur, height);
+  }
+  int lo = 256;
+  for (int y = 0; y < y1 && lo > kNaturalDark; y++) {
+    const uint32 *row = (const uint32 *)(pixels + y * pitch);
+    for (int x = x0; x < x1; x++) {
+      uint32 c = row[x];
+      if (HdFx_IsHudOrSprite(c))
+        continue;
+      int m = IntMin(IntMin(c >> 16 & 255, c >> 8 & 255), c & 255);
+      if (m < lo && (lo = m) <= kNaturalDark)
+        break;
+    }
+  }
+  if (lo > 255)
+    lo = 0;  // no scenery on screen
+  // bright but normal scenes (darkest pixel 0.1 outdoors) keep their effects
+  g_white_floor = (int)(lo * HdFx_Smooth(0.16f, 0.36f, lo / 255.0f) + 0.5f);
+}
+
+float HdFx_WhiteFloor(void) {
+  return g_white_floor / 255.0f;
+}
+
+// Darkens c by k under the game's white (HdFx_MeasureWhite)
+static uint32 ScaleUnderWhite(uint32 c, float k) {
+  int w = g_white_floor;
+  if (!w)
+    return HdFx_ScaleRgb(c, k);
+  int r = c >> 16 & 255, g = c >> 8 & 255, b = c & 255;
+  r = r > w ? w + (int)((r - w) * k) : r;
+  g = g > w ? w + (int)((g - w) * k) : g;
+  b = b > w ? w + (int)((b - w) * k) : b;
+  return (c & 0xff000000) | r << 16 | g << 8 | b;
 }
 
 void HdFx_Mosaic(uint8 *pixels, int pitch, int width, int height) {
@@ -2496,7 +2892,7 @@ void HdFx_SpriteShadows(uint8 *pixels, int pitch, int width, int height) {
       if (m[x] < 0.01f || IsSprite(row[x]) || IsHud(row[x]))
         continue;
       float k = 1.0f - 0.42f * (m[x] > 1 ? 1 : m[x]);
-      row[x] = HdFx_ScaleRgb(row[x], k);
+      row[x] = ScaleUnderWhite(row[x], k);
     }
   }
 }
@@ -2608,4 +3004,5 @@ void HdFx_ResetAfterLoad(void) {
   g_num_particles = 0;
   g_shaft_room = -1;
   g_flash = 0, g_flash_rise = false;
+  memset(g_boom_ghost, 0, sizeof(g_boom_ghost));
 }

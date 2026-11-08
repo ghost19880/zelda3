@@ -172,6 +172,8 @@ void GbaFlash_DimHold(uint8 v);
 void GbaFlash_Bolt(uint8 len);
 // Colore fra a (f = 0) e b (f = n), canale per canale
 uint16 GbaFlash_MixColor(uint16 a, uint16 b, int f, int n);
+// one step (1 per channel) of color c towards t
+uint16 GbaFlash_StepColor(uint16 c, uint16 t);
 // Lampi a palette (stanza del secondo Agahnim 0x80abf64, Monte della Morte
 // oscuro 0x81329a0: stessa macchina e stessa tabella delle attese nel GBA):
 // i colori idx[] vanno di un passo per fotogramma verso flash[] per 32

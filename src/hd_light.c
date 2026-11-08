@@ -451,18 +451,137 @@ static void CollectLights(const uint8 *pixels, int pitch, int height, int mod, b
   }
 }
 
-// Nemici e proiettili infuocati (sprite)
-static bool IsFireSprite(int type, float *radius, bool *cold) {
-  *cold = false;
-  switch (type) {
+// Light given by an enemy or a projectile: fire (warm, with embers), cold
+// (blue), laser (red, no embers) or electric (blue white, flickering)
+enum { kLitFire, kLitCold, kLitLaser, kLitElectric };
+static bool SpriteLight(const HdShownSprite *s, float *radius, int *kind) {
+  *kind = kLitFire;
+  switch (s->type) {
   case 0x70: *radius = 34; return true;  // palla di fuoco del Re Helmasaur
-  case 0x7e: *radius = 64; return true;  // catena di fuoco rotante
+  case 0x7e: case 0x7f: *radius = 64; return true;  // rotating fire bar (clockwise, counterclockwise)
   case 0x80: *radius = 30; return true;  // serpente di fuoco
   case 0x87: *radius = 30; return true;  // fiamma dei Kodongo
   case 0xcc: *radius = 48; return true;  // testa di fuoco di Trinexx
-  case 0x7b: *radius = 36; *cold = true; return true;  // sfere di energia di Agahnim
+  case 0xcd: *radius = 48; *kind = kLitCold; return true;  // Trinexx's ice head
+  case 0x7b: *radius = 36; *kind = kLitCold; return true;  // sfere di energia di Agahnim
+  }
+  // the rest depends on the state of the sprite: only the game's own sprites
+  // (k < 0 = a copy from a neighbour area, HdWorld_ShownSprites)
+  int k = s->k;
+  if (k < 0)
+    return false;
+  switch (s->type) {
+  case 0x55:
+    // sprite_E 0 is the Zora itself; 0x54 the fireball of Zoras, Medusa
+    // heads, 4-way shooters and Blind (Sprite_SpawnFireball); 20 the blue
+    // energy balls (CreateSixBlueBalls)
+    if (!sprite_E[k])
+      return false;
+    *radius = 30;
+    if (sprite_E[k] == 20)
+      *kind = kLitCold;
+    return true;
+  case 0xc9:
+    // Ganon's fire bats: spiral (anim_clock 3), launched (4), trailer (5)
+    if (sprite_anim_clock[k] < 3 || sprite_anim_clock[k] > 5)
+      return false;
+    *radius = 40;
+    return true;
+  case 0x95: case 0x96: case 0x97: case 0x98:
+    // laser eyes: the beam (sprite_A), and the eye a little while it charges
+    *kind = kLitLaser;
+    if (sprite_A[k])
+      return *radius = 30, true;
+    if (sprite_ai_state[k] == 1)
+      return *radius = 18, true;
+    return false;
+  case 0x61:
+    // Beamos: the laser (sprite_C 1), and the eye a little while it charges
+    *kind = kLitLaser;
+    if (sprite_C[k] == 1)
+      return *radius = 30, true;
+    if (sprite_C[k] == 0 && sprite_ai_state[k] == 3 && sprite_delay_main[k])
+      return *radius = 18, true;
+    return false;
+  case 0x2b:
+    // the hobo's campfire under the bridge (sprite_subtype2 2; 0 is the
+    // hobo, 1 his bubble, 3 the smoke): light and embers; in daylight the
+    // light is weak, the warm halo is hd_fx.c ApplyCampfireGlow
+    if (sprite_subtype2[k] != 2)
+      return false;
+    *radius = 44;
+    return true;
+  case 0x89:  // Mothula's beam
+    *kind = kLitLaser;
+    *radius = 30;
+    return true;
+  case 0x23: case 0x24:
+    // Bari: only while electrified (state 1 with the timer running)
+    *kind = kLitElectric;
+    if (sprite_ai_state[k] == 1 && sprite_delay_main[k])
+      return *radius = 36, true;
+    return false;
+  case 0x0d:
+    // Buzzblob: only while electrified (after a hit, sprite_delay_aux1)
+    *kind = kLitElectric;
+    if (sprite_delay_aux1[k])
+      return *radius = 36, true;
+    return false;
   }
   return false;
+}
+
+// Fire and ice drawn by the game as garnishes (small effects apart from the
+// sprites, Garnish_ExecuteSingle): Ganon's floor flames (0x10) and the
+// withering ones (0x11, dimmer as they shrink), Trinexx's fire breath
+// (0x0e) and ice breath (0x0c, cold), the Fire Snake's tail (0x01). Same
+// warm light as the fire sprites; embers only from Ganon's flames. The rings
+// left behind by Mothula's beam (0x02) give the beam's red light, dimmer as
+// they vanish: the sprite is only the first ring. The trails of the eye
+// lasers stay unlit: there the beam itself already gives light
+static void CollectGarnishLights(bool dark, int ext, int cam_x, int cam_y, float t) {
+  float m = dark ? 1.3f : 1.0f;
+  for (int k = 0; k < 30; k++) {
+    int type = garnish_type[k];
+    if (type != 0x01 && type != 0x02 && type != 0x0c && type != 0x0e && type != 0x10 && type != 0x11)
+      continue;
+    // drawn at (x, y - 16) from the camera (Garnish_ReturnIfPrepFails):
+    // centre of the 16x16 picture, or of the 8x8 one (0x0e) / 16x8 one (0x11)
+    // (Mothula's rings at (x, y), Garnish02_MothulaBeamTrail)
+    float x = Garnish_GetX(k) + (type == 0x0e ? 4 : 8) - cam_x + ext;
+    float y = Garnish_GetY(k) - (type == 0x0e || type == 0x11 ? 12 : 8) - cam_y;
+    if (type == 0x02)
+      y += 16;
+    if (x < -64 || y < -64 || x > 2 * ext + 256 + 64 || y > 240 + 64)
+      continue;
+    float pulse = 1.0f + 0.10f * sinf(t * 2.3f + k * 1.7f);
+    switch (type) {
+    case 0x10:
+      AddFireLight(x, y, 30 * pulse * m, 0.60f * m, 0.36f * m, 0.12f * m, 0.35f);
+      break;
+    case 0x11: {
+      float a = garnish_countdown[k] / 8.0f;  // 8 -> 0 while it withers
+      AddLight(x, y, 24 * pulse * m, 0.50f * a * m, 0.30f * a * m, 0.10f * a * m);
+      break;
+    }
+    case 0x0e:
+      AddLight(x, y, 20 * pulse * m, 0.55f * m, 0.32f * m, 0.10f * m);
+      break;
+    case 0x01:
+      AddLight(x, y, 18 * pulse * m, 0.50f * m, 0.30f * m, 0.10f * m);
+      break;
+    case 0x02: {
+      float a = garnish_countdown[k] / 16.0f;  // 16 -> 0 while the ring lasts
+      AddLight(x, y, 30 * m, 0.45f * a * m, 0.12f * a * m, 0.15f * a * m);
+      break;
+    }
+    case 0x0c: {
+      float a = HdFx_Clamp01(garnish_countdown[k] / 32.0f);  // fades at the end
+      AddLight(x, y, 26 * m, 0.28f * a * m, 0.38f * a * m, 0.70f * a * m);
+      break;
+    }
+    }
+  }
 }
 
 static void CollectSpriteLights(bool dark, int ext, int cam_x, int cam_y, float t) {
@@ -475,14 +594,22 @@ static void CollectSpriteLights(bool dark, int ext, int cam_x, int cam_y, float 
   for (int i = 0; i < num_shown; i++) {
     const HdShownSprite *s = &shown[i];
     float radius;
-    bool cold;
+    int kind;
     float x = s->x + 8 - cam_x + ext;
     float y = s->y + 8 - s->z - cam_y;
-    if (IsFireSprite(s->type, &radius, &cold)) {
-      radius *= 1.0f + 0.08f * sinf(t * 2.1f + (s->k >= 0 ? s->k : i));
+    if (SpriteLight(s, &radius, &kind)) {
       float m = dark ? 1.3f : 1.0f;
-      if (cold)
+      if (kind == kLitElectric) {
+        // flickers with the game's own animation (every 2 frames)
+        m *= (frame_counter & 2) ? 1.0f : 0.55f;
+        AddLight(x, y, radius * m, 0.45f * m, 0.60f * m, 0.95f * m);
+        continue;
+      }
+      radius *= 1.0f + 0.08f * sinf(t * 2.1f + (s->k >= 0 ? s->k : i));
+      if (kind == kLitCold)
         AddLight(x, y, radius * m, 0.30f * m, 0.40f * m, 0.75f * m);
+      else if (kind == kLitLaser)
+        AddLight(x, y, radius * m, 0.80f * m, 0.22f * m, 0.26f * m);
       else
         AddFireLight(x, y, radius * m, 0.60f * m, 0.36f * m, 0.12f * m, 0.6f);
       continue;
@@ -587,6 +714,8 @@ static bool IsLavaCell(const uint16 *tm, int row, int col, int ox, int oy) {
   int ch = tm[row * 64 + col] & 0x3ff;
   if (ch < 0x1b0 || ch > 0x1cf || !InRoomView(ox + col * 8 + 4, oy + row * 8 + 4))
     return false;
+  if (HdFx_DungWarpAt(ox + col * 8 + 4, oy + row * 8 + 4))
+    return false;  // warp tile: it has its own glow (hd_fx.c ApplyPortals)
   uint8 *known = &g_lava_known[tm == dung_bg1][(row * 64 + col) >> 3];
   uint8 bit = 1 << (col & 7);
   if (*known & bit)
@@ -932,6 +1061,7 @@ void HdLight_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
 
   CollectLights(pixels, pitch, height, mod, dark, width, torch_mask, ext, cam_x, cam_y, t);
   CollectSpriteLights(dark, ext, cam_x, cam_y, t);
+  CollectGarnishLights(dark, ext, cam_x, cam_y, t);
   if (mod == 7)
     CollectLavaLights(pixels, pitch, width, height, dark, ext, cam_x, cam_y, t);
   if (!g_config.dynamic_light) {
@@ -966,9 +1096,14 @@ void HdLight_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
     g_factor[i] = g_ambient + extra;
   // A stanza illuminata le fiamme fanno solo un alone leggero
   float light_scale = 1.0f;
+  // the Lantern fades out completely as the torches light the room: with the
+  // room fully lit it gives no light at all
+  float lamp_scale = 1.0f;
   if (dark) {
     float k = (g_ambient - dark_ambient) / (1.0f - dark_ambient);
-    light_scale = 1.0f - (k < 0 ? 0 : k > 1 ? 1 : k) * 0.75f;
+    k = k < 0 ? 0 : k > 1 ? 1 : k;
+    light_scale = 1.0f - k * 0.75f;
+    lamp_scale = g_lit_dark_room ? 0.0f : 1.0f - k;
   }
   // Nelle stanze buie la luce resta nella stanza (512x512 nel mondo) al centro
   // dello schermo, come il cono della Lanterna del gioco: passando da una porta
@@ -1008,9 +1143,9 @@ void HdLight_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
   // room's colours, which come back when a torch lights the whole room
   g_lamp_valid = false;
   float link_x = link_x_coord + g_trans_link_dx + 8 - cam_x + ext;
-  if (dark && BuildLanternLight(width, height, link_x, link_y_coord + g_trans_link_dy + 12 - cam_y)) {
+  if (dark && lamp_scale > 0.0f && BuildLanternLight(width, height, link_x, link_y_coord + g_trans_link_dy + 12 - cam_y)) {
     g_lamp_valid = true;
-    float fl = (1.0f + 0.03f * sinf(t * 1.3f)) * light_scale;
+    float fl = (1.0f + 0.03f * sinf(t * 1.3f)) * lamp_scale;
     float cr = fl, cg = fl, cb = fl;
     for (int i = 0; i < n; i++) {
       float v = g_lamp[i];
