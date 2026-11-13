@@ -1633,6 +1633,7 @@ static int g_last_lx, g_last_ly;   // Link nel frame precedente
 static bool g_vis_valid;
 static int g_prev_module;
 static int g_prev_area = -1;      // area esterna nel frame precedente
+static bool g_prev_mosaic;        // view held still by a mosaic area change last frame
 static bool g_vis_glide;          // uscita da una casa: la vista scivola al suo posto
 
 // Free view position rounded to the nearest pixel
@@ -1654,7 +1655,25 @@ static float Approach(float v, float t, int m) {
 
 static void ClampViewArea(int *cam_x, int *cam_y);
 
+static bool g_ease_x, g_ease_y;  // the view is sliding to a limit (HdWorld_ClampView keeps it)
+
+// A view limit that appears all at once (entering an area next to the other
+// level of Death Mountain, ClampViewArea): the view slides to it instead of
+// jumping there in one frame (120 px going up from 0x12 into 0x0a, 426 px
+// going right from 0x02 onto the mountain 0x03). Clamped
+// value c of view v, shown last frame at p, Link moving by m: it moves at
+// most as much as Link plus 1-8 px per frame (a tenth of the way)
+static int EaseLimit(int c, int v, int p, int m) {
+  // no limit this frame, or the view was put somewhere else on purpose
+  // (bird arrival...): no slide from where it was
+  if (c == v || abs(v - p) > abs(m) + 8)
+    return c;
+  int d = c - p, lim = abs(m) + IntMax(1, IntMin(8, abs(d) / 10));
+  return abs(d) <= lim ? c : p + (d > 0 ? lim : -lim);
+}
+
 void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
+  g_ease_x = g_ease_y = false;
   int gx = BG2HOFS_copy2, gy = BG2VOFS_copy2;
   // titolo, selezione file, caricamento, e dentro case e labirinti (6, 7):
   // il mondo esterno torna com'era
@@ -1680,9 +1699,15 @@ void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
   g_prev_module = main_module_index;
   // fase 10: Link esce dalla porta dopo il cerchio che si apre; fase 9: prima
   // si apre il portone (chiesa, castello): la vista resta su Link
+  // After the mosaic the game spends one frame in phase 8 (end of the area
+  // change) before play: the view stays still there too, otherwise for that
+  // frame it showed the game's camera (136 px away) and then snapped on Link
+  bool mosaic = InMosaicTransition() || (g_prev_mosaic && main_module_index == 9 && submodule_index == 8);
   int mode = !HdWorld_Active() ? 0 : InFluteArrival() || InSoftIris() ? 1 : main_module_index != 9 ? 0 :
              submodule_index == 0 || submodule_index == 9 || submodule_index == 10 || InMapReturn() ? 1 :
-             InMosaicTransition() || InWarpView() ? 3 : 0;
+             mosaic || InWarpView() ? 3 : 0;
+  bool mosaic_ended = g_prev_mosaic && mode == 1;
+  g_prev_mosaic = mode == 3 && mosaic;
   // Col mondo continuo il passaggio fra aree si fa tutto in un frame di gioco
   // (fasi 1-8 nello stesso frame, InstantWorldTransition): il cambio d'area
   // si riconosce dal numero dell'area
@@ -1703,6 +1728,9 @@ void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
   int z = (allow_scroll_z && link_z_coord != 0xffff) ? link_z_coord : 0;
   int lx = link_x_coord + 8, ly = (uint16)(link_y_coord - z + 12);
   int mx = g_vis_valid ? lx - g_last_lx : 0, my = g_vis_valid ? ly - g_last_ly : 0;
+  // view shown last frame (for EaseLimit)
+  bool had_view = g_vis_valid;
+  int pvx = RoundVis(g_vis_x), pvy = RoundVis(g_vis_y);
   g_last_lx = lx, g_last_ly = ly;
   if (mode == 3) {
     // Mosaico e dissolvenza: la vista resta ferma nel mondo mentre il gioco
@@ -1725,7 +1753,8 @@ void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
     // stava Link (in fondo allo schermo, con la telecamera ferma al bordo
     // basso) il gioco lo teneva poi li' per sempre e, risalendo, Link restava
     // in basso con la vista spostata giu'
-    if (area_changed && g_vis_valid) {
+    // (the same at the end of the mosaic: the area changed under it)
+    if ((area_changed || mosaic_ended) && g_vis_valid) {
       bool vert = overworld_screen_transition < 2;
       int px = lx - RoundVis(g_vis_x), py = ly - RoundVis(g_vis_y);
       if (vert)
@@ -1799,6 +1828,11 @@ void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
   int vx = RoundVis(g_vis_x), vy = RoundVis(g_vis_y);
   int cx = vx, cy = vy;
   ClampViewArea(&cx, &cy);
+  if (had_view) {
+    int ex = EaseLimit(cx, vx, pvx, mx), ey = EaseLimit(cy, vy, pvy, my);
+    g_ease_x = ex != cx, g_ease_y = ey != cy;
+    cx = ex, cy = ey;
+  }
   if (cx != vx) g_vis_x = (float)cx;
   if (cy != vy) g_vis_y = (float)cy;
   g_vis_valid = true;
@@ -1876,8 +1910,12 @@ static bool PlainBelow(int head, int *bottom) {
 }
 
 void HdWorld_ClampView(int *cam_x, int *cam_y) {
-  if (HdWorld_Active())
-    ClampViewArea(cam_x, cam_y);
+  if (!HdWorld_Active())
+    return;
+  int x = *cam_x, y = *cam_y;
+  ClampViewArea(cam_x, cam_y);
+  if (g_ease_x) *cam_x = x;  // sliding to the limit (EaseLimit)
+  if (g_ease_y) *cam_y = y;
 }
 
 static void ClampViewArea(int *cam_x, int *cam_y) {
@@ -2160,11 +2198,58 @@ static void LoadAreaLikeExit(int head) {
   StoreMap(head);
 }
 
+// Lost Woods canopy (overlay 0x9e, after the Master Sword): the game puts it
+// on BG1, summed at half over the forest, only while Link is in the area.
+// Seen from the area next to it (continuous world) it is drawn here, so the
+// forest looks different before the mosaic change. Built with the forest's
+// own graphics and colors while its image is made (RenderArea): 512 x 512,
+// 0 = transparent
+enum { kCanopyHead = 0x00, kCanopyOverlay = 0x9e, kCanopySize = 512 };
+static uint32 *g_canopy;
+static bool g_canopy_ready;
+
+static bool CanopyArea(int head) {
+  return head == kCanopyHead && (save_ow_event_info[0x80] & 0x40);
+}
+
+static void BuildCanopy(void) {
+  if (!g_canopy && !(g_canopy = malloc(kCanopySize * kCanopySize * sizeof(uint32))))
+    return;
+  Ppu *ppu = g_zenv.ppu;
+  uint16 *m16s = (uint16 *)&g_ram[0x4000];
+  Overworld_DecompressAndDrawOneQuadrant(m16s, kCanopyOverlay);
+  const uint16 *map8 = GetMap16toMap8Table();
+  uint16 chr_base = ppu->bgLayer[0].tileAdr;
+  for (int r = 0; r < 32; r++) {
+    for (int c = 0; c < 32; c++) {
+      uint16 m16 = m16s[r * 64 + c];
+      for (int q = 0; q < 4; q++) {
+        uint16 e = map8[m16 * 4 + q];
+        int pal = e >> 10 & 7;
+        bool hf = (e & 0x4000) != 0, vf = (e & 0x8000) != 0;
+        int ox = c * 16 + (q & 1) * 8, oy = r * 16 + (q >> 1) * 8;
+        const uint16 *t = &ppu->vram[(chr_base + (e & 0x3ff) * 16) & 0x7fff];
+        for (int row = 0; row < 8; row++) {
+          int rr = vf ? 7 - row : row;
+          uint32 *dst = g_canopy + (oy + row) * kCanopySize + ox;
+          for (int col = 0; col < 8; col++) {
+            int v = HdFx_Pixel4bpp(t[rr], t[rr + 8], hf ? col : 7 - col);
+            dst[col] = v ? 0x01000000u | HdFx_Bgr15ToRgb(HdFx_RealBg(main_palette_buffer, pal * 16 + v)) : 0;
+          }
+        }
+      }
+    }
+  }
+  g_canopy_ready = true;
+}
+
 static void RenderArea(AreaImage *img, int head) {
   HdWorld_SaveRamVram();
   LoadAreaLikeExit(head);
   Overworld_GbaBridgeChars(g_zenv.ppu, head);  // la VRAM si ripristina qui sotto
   DrawLoadedArea(img);
+  if (CanopyArea(head))
+    BuildCanopy();
   HdWorld_RestoreRamVram();
 }
 
@@ -2248,6 +2333,10 @@ static int HeadAt(int wx, int wy) {
   // durante lo specchio, prima del cambio, lo schermo mostra il mondo di prima
   int world = (overworld_screen_index & 0x40) ^ (g_warp_old_world ? 0x40 : 0);
   return Overworld_AreaHead((wy >> 9) * 8 + (wx >> 9)) | world;
+}
+
+int HdWorld_AreaHeadAt(int wx, int wy) {
+  return HdWorld_Active() ? HeadAt(wx, wy) : -1;
 }
 
 // Columns of the current area that the PPU has around the game camera (ext
@@ -2387,8 +2476,12 @@ static inline uint32 PackSat(uint32 c, int r, int g, int b) {
 static inline uint32 OverlayBlend(const OverlayCtx *o, uint32 c, int sx, int sy) {
   if (o->sky) {
     uint32 l = c >> 24;
-    if (l != 3 && l != 5)
-      return c;  // solo lo sfondo
+    // only the backdrop, and only where it is the sky: the images of the
+    // mountain mark it as layer 3 (DrawLoadedArea), those of the plains as 5
+    // (sliding to a limit, EaseLimit, a plain area shows from the mountain:
+    // its trees had a blue outline)
+    if (l != 3)
+      return c;
     // come la PPU: colore di fondo attuale piu' lo strato (somma dimezzata
     // se richiesto), o piu' il colore fisso dove lo strato e' trasparente.
     // Colori a 5 bit, R nei bit bassi.
@@ -3991,6 +4084,37 @@ static void NormalGameArrows(uint8 *pixels, int pitch, int width, int height) {
 // ---------------------------------------------------------------------------
 // Composizione del frame
 
+// The canopy over the forest seen from outside: same half sum as the game,
+// and the same parallax (the game moves it 1/4 of the view horizontally and
+// 1/2 vertically). Not while the game's own canopy is on the screen
+static void DrawNeighborCanopy(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y,
+                               const OverlayCtx *ov) {
+  if (!g_canopy_ready || (ov->on && BYTE(overlay_index) == kCanopyOverlay))
+    return;
+  int world = overworld_screen_index & 0x40;
+  if (world || !CanopyArea(kCanopyHead))
+    return;
+  int ax, ay, as;
+  AreaRect(kCanopyHead, &ax, &ay, &as);
+  int x0 = IntMax(ax - cam_x, 0), x1 = IntMin(ax + as - cam_x, width);
+  int y0 = IntMax(ay - cam_y, 0), y1 = IntMin(ay + as - kHiddenRows - cam_y, height);
+  int px = cam_x - (cam_x >> 2), py = cam_y - (cam_y >> 1);  // canopy moves 1/4 and 1/2 of the view
+  for (int y = y0; y < y1; y++) {
+    uint32 *row = (uint32 *)(pixels + y * pitch);
+    const uint32 *src = g_canopy + ((cam_y + y - py) & (kCanopySize - 1)) * kCanopySize;
+    for (int x = x0; x < x1; x++) {
+      uint32 oc = src[(cam_x + x - px) & (kCanopySize - 1)], c = row[x];
+      uint32 l = c >> 24;
+      // as the game's color math (BG2, sprites with palettes 4-7, backdrop)
+      if (!oc || l == 2 || l == 6 || (l < 6 && !(0x32 >> l & 1)))
+        continue;
+      oc = Dim(oc & 0xffffff);
+      row[x] = (c & 0xff000000) | (((c >> 16 & 255) + (oc >> 16 & 255)) >> 1) << 16 |
+               (((c >> 8 & 255) + (oc >> 8 & 255)) >> 1) << 8 | ((c & 255) + (oc & 255)) >> 1;
+    }
+  }
+}
+
 void HdWorld_Composite(uint8 *pixels, int pitch, int width, int height) {
   g_renders_this_frame = 0;
   GuestRestoreOam();
@@ -4030,7 +4154,7 @@ void HdWorld_Composite(uint8 *pixels, int pitch, int width, int height) {
   // piu' all'interno (HdWorld_ClampView): le colonne oltre quelle caricate
   // vengono dall'immagine dell'area.
   // area vicina non ancora disegnata (al massimo un frame): colore di fondo
-  uint32 outside = Bgr15ToPixel(HdFx_RealBg(main_palette_buffer, 0), 5);
+  uint32 outside = Bgr15ToPixel(HdFx_RealBg(main_palette_buffer, 0), ov.sky ? 3 : 5);
   int last_head = -2;
   AreaImage *img = NULL;
   // Mosaico del gioco anche sulle immagini (blocchi allineati come nella PPU)
@@ -4078,5 +4202,6 @@ void HdWorld_Composite(uint8 *pixels, int pitch, int width, int height) {
     DrawAnimatedCells(pixels, pitch, width, height, cam_x, cam_y, &ov);
     DrawPersistent(pixels, pitch, width, height, cam_x, cam_y, &ov);
   }
+  DrawNeighborCanopy(pixels, pitch, width, height, cam_x, cam_y, &ov);
   PrefetchNeighbors();
 }

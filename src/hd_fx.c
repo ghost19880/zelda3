@@ -1941,12 +1941,36 @@ static void FogSampleColors(Ppu *ppu) {
   }
 }
 
+// Fog colors of the two forests (Lost Woods, Skull Woods) for when they are
+// seen from the area next to them (continuous world): measured on the game's
+// layer (see FogSampleColors), replaced by the real ones once seen in the area
+static int g_near_fog[2][3][3] = {
+  { { 2, 6, 14 }, { 7, 13, 29 }, { 18, 29, 31 } },  // shade, mid, light
+  { { 0, 0, 0 }, { 3, 3, 4 }, { 7, 7, 11 } },
+};
+
+// Area (head) with the forest fog: Lost Woods before the Master Sword is
+// taken, Skull Woods always (as Overworld_LoadOverlays, overlay 0x9d)
+static bool FogArea(int head) {
+  return head == 0x40 || (head == 0x00 && !(save_ow_event_info[0x80] & 0x40));
+}
+
 void HdFx_FogBeforeRender(Ppu *ppu) {
   g_fog_scene = ForestFogScene(ppu);
   g_fog_on = g_config.fx_fog && g_fog_scene;
-  if (!g_fog_on)
+  if (!g_fog_scene)
     return;
   FogSampleColors(ppu);
+  if (BYTE(overlay_index) == 0x9d) {
+    int w = (overworld_screen_index & 0x40) != 0;
+    for (int c = 0; c < 3; c++) {
+      g_near_fog[w][0][c] = g_fog_shade[c];
+      g_near_fog[w][1][c] = g_fog_mid[c];
+      g_near_fog[w][2][c] = g_fog_light[c];
+    }
+  }
+  if (!g_fog_on)
+    return;
   // la PPU non disegna la nebbia del gioco
   g_fog_saved_sub = ppu->screenEnabled[1], g_fog_saved_math = ppu->mathEnabled;
   ppu->screenEnabled[1] &= ~1;
@@ -1975,25 +1999,60 @@ static float FogNoise(float x, float y, uint32 salt) {
 void HdFx_Fog(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y) {
   Ppu *ppu = g_zenv.ppu;
   int bri = ppu->forcedBlank ? 0 : ppu->brightness;
-  if (!g_fog_on || bri == 0)
+  // Continuous world: a forest with the fog seen from the area next to it
+  // keeps its fog (with the same look), only over that area, so the
+  // different zone shows before the mosaic change
+  bool near = !g_fog_scene && HdWorld_Active() && !player_is_indoors && ppu->mode != 7;
+  if ((!g_fog_on && !near) || bri == 0)
     return;
+  int ext = (width - 256) / 2;
+  float cam_x = (float)(BG2HOFS_copy2 + bias_x - ext), cam_y = (float)(BG2VOFS_copy2 + bias_y);
+  // the cells are fixed in the world (offset ox, oy on the screen): fixed on
+  // the screen, each pixel of scrolling moved every cell over the ground and
+  // the fog (and its edge seen from outside) shimmered at every step
+  int ox = (int)cam_x & (kFogCell - 1), oy = (int)cam_y & (kFogCell - 1);
+  int gw = width / kFogCell + 3, gh = height / kFogCell + 3;
+  if (gw > kFogMaxW) gw = kFogMaxW;
+  if (gh > kFogMaxH) gh = kFogMaxH;
+  // near: how much each cell lies in the forest (0-1, softened over ~24 px
+  // at the area border); screen row 0 is background row 1
+  static float near_w[kFogMaxH][kFogMaxW];
+  if (near) {
+    int wx0 = (int)cam_x, wy0 = (int)cam_y + 1;
+    bool any = false;
+    for (int y = 0; y <= height + 64 && !any; y += 64)
+      for (int x = 0; x <= width + 64 && !any; x += 64)
+        any = FogArea(HdWorld_AreaHeadAt(wx0 + IntMin(x, width), wy0 + IntMin(y, height)));
+    if (!any)
+      return;
+    for (int gy = 0; gy < gh; gy++)
+      for (int gx = 0; gx < gw; gx++) {
+        int n = 0;
+        for (int dy = -12; dy <= 12; dy += 12)
+          for (int dx = -12; dx <= 12; dx += 12)
+            n += FogArea(HdWorld_AreaHeadAt(wx0 + gx * kFogCell - ox + dx, wy0 + gy * kFogCell - oy + dy));
+        near_w[gy][gx] = n * (1.0f / 9);
+      }
+  }
   // la nebbia si muove solo mentre si gioca (non nei menu)
   if (g_fog_last_frame != frame_counter) {
     g_fog_last_frame = frame_counter;
     if (main_module_index == 9)
       g_fog_t++;
   }
-  int ext = (width - 256) / 2;
-  float cam_x = (float)(BG2HOFS_copy2 + bias_x - ext), cam_y = (float)(BG2VOFS_copy2 + bias_y);
   float t = (float)g_fog_t;
   // centro di Link sullo schermo
   float lx = link_x_coord + 8 - cam_x, ly = link_y_coord + 12 - (int16)link_z_coord - cam_y;
-  int gw = width / kFogCell + 2, gh = height / kFogCell + 2;
-  if (gw > kFogMaxW) gw = kFogMaxW;
-  if (gh > kFogMaxH) gh = kFogMaxH;
+  // without the HD fog the forest seen from outside gets the game's main
+  // fog color only (flat, like most of its layer)
+  bool clouds = g_config.fx_fog;
   for (int gy = 0; gy < gh; gy++) {
     for (int gx = 0; gx < gw; gx++) {
-      float sx = (float)(gx * kFogCell), sy = (float)(gy * kFogCell);
+      if (!clouds || (near && near_w[gy][gx] == 0)) {
+        g_fog_alpha[gy][gx] = 0;
+        continue;
+      }
+      float sx = (float)(gx * kFogCell - ox), sy = (float)(gy * kFogCell - oy);
       // banchi grandi a terra, legati al mondo, scorrono lenti verso sud-est
       float wx = cam_x + sx - t * 0.12f, wy = cam_y + sy - t * 0.05f;
       // tre ottave: nuvole grandi con il bordo a sbuffi
@@ -2004,9 +2063,10 @@ void HdFx_Fog(uint8 *pixels, int pitch, int width, int height, int bias_x, int b
       float n2 = FogNoise(px / 40.0f, py / 40.0f, 0x53) * 0.7f + FogNoise(px / 18.0f, py / 18.0f, 0x54) * 0.3f;
       // nuvole piene (il chiaro dell'originale, al centro anche un po' di piu')
       float d = 1.15f * HdFx_Smooth(0.54f, 0.68f, n1) + 0.50f * HdFx_Smooth(0.62f, 0.80f, n2);
-      // piu' rada attorno a Link
+      // piu' rada attorno a Link (not from outside: he is not in it)
       float dx = sx - lx, dy = (sy - ly) * 1.25f;
-      d *= 0.45f + 0.55f * HdFx_Smooth(18.0f, 84.0f, sqrtf(dx * dx + dy * dy));
+      if (!near)
+        d *= 0.45f + 0.55f * HdFx_Smooth(18.0f, 84.0f, sqrtf(dx * dx + dy * dy));
       if (d > 1.15f) d = 1.15f;
       // chiazze scure a terra, fra una nuvola e l'altra (valori negativi)
       float n3 = FogNoise(wx / 72.0f, wy / 72.0f, 0x56) * 0.7f + FogNoise(wx / 28.0f, wy / 28.0f, 0x57) * 0.3f;
@@ -2020,28 +2080,41 @@ void HdFx_Fog(uint8 *pixels, int pitch, int width, int height, int bias_x, int b
   // distante dal medio: le nuvole chiare si fanno un po' piu' evidenti
   float mid[3], up[3], down[3];
   float up_k = (overworld_screen_index & 0x40) ? kFogDarkWorldLight : 1.0f;
+  const int (*fc)[3] = g_near_fog[(overworld_screen_index & 0x40) != 0];
   for (int c = 0; c < 3; c++) {
-    mid[c] = g_fog_mid[c] * 8.25f * bri / 15;
-    up[c] = (g_fog_light[c] * 8.25f * bri / 15 - mid[c]) * up_k;
-    down[c] = mid[c] - g_fog_shade[c] * 8.25f * bri / 15;
+    int sh = near ? fc[0][c] : g_fog_shade[c], md = near ? fc[1][c] : g_fog_mid[c];
+    int li = near ? fc[2][c] : g_fog_light[c];
+    mid[c] = md * 8.25f * bri / 15;
+    up[c] = (li * 8.25f * bri / 15 - mid[c]) * up_k;
+    down[c] = mid[c] - sh * 8.25f * bri / 15;
   }
+  // layers summed with the fog: the game's own, or as its CGADSUB 0x72
+  uint8 math = near ? 0x32 : g_fog_saved_math;
   for (int y = 0; y < height; y++) {
-    int gy = y / kFogCell;
+    int gy = (y + oy) / kFogCell;
     if (gy + 1 >= gh)
       break;
-    float fy = (float)(y - gy * kFogCell) * (1.0f / kFogCell);
+    float fy = (float)(y + oy - gy * kFogCell) * (1.0f / kFogCell);
     const float *a0 = g_fog_alpha[gy], *a1 = g_fog_alpha[gy + 1];
     uint32 *row = (uint32 *)(pixels + y * pitch);
     for (int x = 0; x < width; x++) {
-      int gx = x / kFogCell;
+      int gx = (x + ox) / kFogCell;
       if (gx + 1 >= gw)
         break;
       // solo dove la PPU somma lo strato: non l'HUD ne' gli sprite con le
       // palette 0-3 (layer 6), che nell'originale restano fuori dalla nebbia
       uint32 l = row[x] >> 24;
-      if (l == 2 || l == 6 || (l < 6 && !(g_fog_saved_math >> l & 1)))
+      if (l == 2 || l == 6 || (l < 6 && !(math >> l & 1)))
         continue;
-      float fx = (float)(x - gx * kFogCell) * (1.0f / kFogCell);
+      float fx = (float)(x + ox - gx * kFogCell) * (1.0f / kFogCell);
+      float k = 1.0f;
+      if (near) {
+        const float *w0 = near_w[gy], *w1 = near_w[gy + 1];
+        float wt = w0[gx] + (w0[gx + 1] - w0[gx]) * fx, wb = w1[gx] + (w1[gx + 1] - w1[gx]) * fx;
+        k = wt + (wb - wt) * fy;
+        if (k <= 0)
+          continue;
+      }
       float top = a0[gx] + (a0[gx + 1] - a0[gx]) * fx, bot = a1[gx] + (a1[gx + 1] - a1[gx]) * fx;
       float a = top + (bot - top) * fy;
       // come la PPU: (terreno + nebbia) / 2
@@ -2050,6 +2123,11 @@ void HdFx_Fog(uint8 *pixels, int pitch, int width, int height, int bias_x, int b
       int r = ((int)(v >> 16 & 255) + (int)(mid[0] + dir[0] * a)) >> 1;
       int g = ((int)(v >> 8 & 255) + (int)(mid[1] + dir[1] * a)) >> 1;
       int b = ((int)(v & 255) + (int)(mid[2] + dir[2] * a)) >> 1;
+      if (k < 1.0f) {  // area border seen from outside: fades in
+        r = (int)(v >> 16 & 255) + (int)((r - (int)(v >> 16 & 255)) * k);
+        g = (int)(v >> 8 & 255) + (int)((g - (int)(v >> 8 & 255)) * k);
+        b = (int)(v & 255) + (int)((b - (int)(v & 255)) * k);
+      }
       row[x] = (v & 0xff000000) | HdFx_ClampByte(r) << 16 | HdFx_ClampByte(g) << 8 | HdFx_ClampByte(b);
     }
   }
