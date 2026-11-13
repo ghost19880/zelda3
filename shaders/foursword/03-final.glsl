@@ -266,7 +266,7 @@ void main()
 
     // --- Ombre di nuvole (solo all'aperto) -------------------------------
     // calcolate alla risoluzione SNES nel passaggio 1 (fsa_clouds.inc)
-    // (letto a meta' risoluzione: il bordo torna stretto come prima)
+    // (letto a meta' risoluzione: lo smoothstep tiene il bordo stretto)
     float cloud = Sunny > 0.5 ? smoothstep(0.2, 0.8, COMPAT_TEXTURE(Source, uv).b) : 0.0;
     color *= 1.0 - FSA_CLOUDS * cloud * (1.0 - hud);
 

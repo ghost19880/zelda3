@@ -98,7 +98,7 @@ static const FeatureOption kFeatureOptions[] = {
   { "Cambio oggetti con L e R", "ItemSwitchLR", kFeatures0_SwitchLR },
   { "L/R solo sui primi 4 oggetti", "ItemSwitchLRLimit", kFeatures0_SwitchLRLimit },
   { "Inventario esteso", "ExtendedInventory", kFeatures0_ExtendedInventory },
-  { "Spada e oggetti interazione ambiente", "SwordAndItemsInteraction", kFeatures0_SwordAndItems },
+  { "Spada e oggetti come su GBA", "SwordAndItemsInteraction", kFeatures0_SwordAndItems },
   { "Oggetti riempiono le risorse", "ItemsRefillResources", kFeatures0_ItemsRefillResources },
   { "Pozione d'oro", "GoldPotion", kFeatures0_GoldPotion },
   { "Interazione bruciatura e congelamento", "BurnAndFreezeInteraction", kFeatures0_BurnAndFreeze },
@@ -280,7 +280,6 @@ static int TextWidth(const char *s) {
 static const char *ShortLabel(const char *s) {
   static const char *const kShort[][2] = {
     { "Specchio verso il Mondo delle Tenebre", "Specchio verso M. delle Tenebre" },
-    { "Spada e oggetti interazione ambiente", "Spada e oggetti: ambiente" },
     { "Interazione bruciatura e congelamento", "Bruciatura e congelamento" },
   };
   for (int i = 0; i < countof(kShort); i++)
@@ -374,7 +373,7 @@ static const char *Tr(const char *it) {
     { "Tasto X per gli oggetti", "X button for items" },
     { "Cambio oggetti con L e R", "Switch items with L and R" },
     { "Tasti L e R per gli oggetti", "L and R buttons for items" },
-    { "Spada e oggetti interazione ambiente", "Sword and items interaction" },
+    { "Spada e oggetti come su GBA", "Sword and items as on GBA" },
     { "Oggetti riempiono le risorse", "Items refill resources" },
     { "Pozione d'oro", "Gold potion" },
     { "Interazione bruciatura e congelamento", "Burn and freeze interaction" },
@@ -439,7 +438,7 @@ static const char *Tr(const char *it) {
     { "Immersione con le pinne", "Dive with the flippers" },
     { "Frecce piantate nei muri", "Arrows stuck in walls" },
     { "Giravolta Tornado", "Hurricane Spin" },
-    { "Boomerang come FSA", "Boomerang as in FSA" },
+    { "Oggetti come FSA", "Items as in FSA" },
     { "Rocce incantate", "Enchanted rocks" },
     { "Danni dei nemici come su GBA", "Enemy damage as on GBA" },
     { "Velocit\xc3\xa0 dei dialoghi", "Dialogue speed" },
@@ -584,7 +583,7 @@ static void SaveSettings() {
   AddIni(v, &n, "[Features]", "FlipperDive", "%d", g_config.flipper_dive);
   AddIni(v, &n, "[Features]", "StuckArrows", "%d", g_config.stuck_arrows);
   AddIni(v, &n, "[Features]", "HurricaneSpin", "%d", g_config.hurricane_spin);
-  AddIni(v, &n, "[Features]", "FsaBoomerang", "%d", g_config.fsa_boomerang);
+  AddIni(v, &n, "[Features]", "FsaItems", "%d", g_config.fsa_items);
   AddIni(v, &n, "[Features]", "EnchantedRocks", "%d", g_config.enchanted_rocks);
   AddIni(v, &n, "[Features]", "ItemOnX", "%d", g_config.item_on_x);
   AddIni(v, &n, "[Features]", "ItemOnLR", "%d", g_config.item_on_lr);
@@ -830,7 +829,7 @@ static void BuildItemsRaw(void) {
     AddFeature(kFeatures0_GoldPotion);
     AddItem(108, "Danni dei nemici come su GBA", YesNo(g_config.gba_damage));
     AddItem(104, "Giravolta Tornado", YesNo(g_config.hurricane_spin));
-    AddItem(109, "Boomerang come FSA", YesNo(g_config.fsa_boomerang));
+    AddItem(109, "Oggetti come FSA", YesNo(g_config.fsa_items));
     AddFeature(kFeatures0_MoreActiveBombs);
     AddFeature(kFeatures0_CarryMoreRupees);
     AddHeader("Correzioni");
@@ -961,7 +960,7 @@ static void Activate(int id, int dir) {
       if (g_config.gba_hud)
         SetFeature(kFeatures0_ModernHud, false);
     } else if (id == 109) {
-      g_config.fsa_boomerang = !g_config.fsa_boomerang;
+      g_config.fsa_items = !g_config.fsa_items;
     } else if (id == 107) {
       // spenta: la roccia accesa si spegne subito (GbaRock_Frame); accesa:
       // la prossima roccia nasce entrando in un'area

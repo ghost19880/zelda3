@@ -699,6 +699,23 @@ void Ancilla_Sfx3_Pan(int k, uint8 v) {  // 88802e
   sound_effect_2 = v | Ancilla_CalculateSfxPan(k);
 }
 
+// Fire Rod as in Four Swords Adventures (FsaItems): the flames of the stream
+// kept up while the button is held (LinkItem_Rod). Each one is a Fire Rod
+// shot that flies a few frames (the number kept here, 0 = an ordinary shot)
+// and then burns out where it got to, drifting on and ending in smoke, like
+// the puffs of the FSA stream (measured in Dolphin: yellow puffs out of the rod
+// growing orange and red about 33 pixels ahead, then dark smoke going up).
+// Drawn with the big flame of the shot's own burst, flying and burning, then
+// its smoke
+// The stream as long as the FSA one for Link's size: in the Dolphin frames
+// (5.73 video pixels to an FSA sprite pixel, Link about 21 pixels tall, shot
+// in open ground) the flames reach about 57 pixels from Link's middle, 2.7
+// times his height: 65 pixels for our Link, 24 tall. Here a flame flies 7-9
+// steps of 4 pixels and burns on drifting 9 more, 16 pixels wide: 61-69
+enum { kRodPuffLimit = 9, kRodPuffPhase = 6, kRodPuffBurn = 4 * kRodPuffPhase };
+static const uint8 kRodPuffFlight[4] = {6, 6, 7, 8};
+static uint8 g_rod_puff[kAncilla_Slots];
+
 void AncillaAdd_FireRodShot(uint8 type, uint8 y) {  // 8880b3
   static const int8 kFireRod_X[4] = {0, 0, -8, 16};
   static const int8 kFireRod_Y[4] = {-8, 16, 3, 3};
@@ -723,6 +740,7 @@ void AncillaAdd_FireRodShot(uint8 type, uint8 y) {  // 8880b3
   ancilla_item_to_link[j] = 0;
   ancilla_objprio[j] = 0;
   ancilla_U[j] = 0;
+  g_rod_puff[j] = 0;
   int i = link_direction_facing >> 1;
   ancilla_dir[j] = i;
 
@@ -751,6 +769,104 @@ void AncillaAdd_FireRodShot(uint8 type, uint8 y) {  // 8880b3
       Ancilla_Sfx2_Pan(j, 0x2a);
     }
   }
+}
+
+// One flame of the FsaItems stream: an ordinary Fire Rod shot (as
+// AncillaAdd_FireRodShot) without its sound, a few of them at once
+void AncillaAdd_FireRodPuff(void) {
+  static const int8 kPuff_X[4] = {0, 0, -8, 16};
+  static const int8 kPuff_Y[4] = {-8, 16, 3, 3};
+  static const int8 kPuff_Xvel[4] = {0, 0, -64, 64};
+  static const int8 kPuff_Yvel[4] = {-64, 64, 0, 0};
+  int j = Ancilla_AllocInit(2, kRodPuffLimit - 1);
+  if (j < 0)
+    return;
+  ancilla_type[j] = 2;
+  ancilla_numspr[j] = kAncilla_Pflags[2];
+  ancilla_timer[j] = 3;
+  ancilla_step[j] = 0;
+  ancilla_item_to_link[j] = 0;
+  ancilla_objprio[j] = 0;
+  ancilla_U[j] = 0;
+  g_rod_puff[j] = kRodPuffFlight[GetRandomNumber() & 3];
+  int i = link_direction_facing >> 1;
+  ancilla_dir[j] = i;
+  if (Ancilla_CheckInitialTile_A(j) < 0) {
+    Ancilla_SetXY(j, link_x_coord + kPuff_X[i], link_y_coord + kPuff_Y[i]);
+    ancilla_x_vel[j] = kPuff_Xvel[i];
+    ancilla_y_vel[j] = kPuff_Yvel[i];
+    ancilla_floor[j] = link_is_on_lower_level;
+    ancilla_floor2[j] = link_is_on_lower_level_mirror;
+  } else {
+    // a wall right in front of the rod: the flame burns out there
+    ancilla_step[j] = 1;
+    ancilla_timer[j] = kRodPuffBurn - 1;
+    ancilla_numspr[j] = 8;
+  }
+}
+
+// The Ice Rod held as the Fire Rod (FsaItems): a stream of short Ice Rod
+// shots, each one bursting as on a wall (Ancilla11_IceRodWallHit) after a few
+// steps of 3 pixels, about as far as the flames reach. Kept in g_rod_puff:
+// the steps left (0 = an ordinary shot)
+static const uint8 kIcePuffFlight[4] = {8, 9, 10, 10};
+
+static void IceRodPuff_Burst(int k) {
+  ancilla_type[k] = 0x11;
+  ancilla_numspr[k] = kAncilla_Pflags[0x11];
+  ancilla_item_to_link[k] = 0;
+  ancilla_aux_timer[k] = 4;
+}
+
+void AncillaAdd_IceRodPuff(void) {
+  static const int8 kIcePuff_X[4] = {0, 0, -20, 20};
+  static const int8 kIcePuff_Y[4] = {-16, 24, 8, 8};
+  static const int8 kIcePuff_Xvel[4] = {0, 0, -48, 48};
+  static const int8 kIcePuff_Yvel[4] = {-48, 48, 0, 0};
+  int k = Ancilla_AddAncilla(0xb, kRodPuffLimit - 1);
+  if (k < 0)
+    return;
+  ancilla_step[k] = 1;  // flying at once, without the shot's wait
+  ancilla_arr25[k] = 0;
+  ancilla_item_to_link[k] = 4;
+  ancilla_L[k] = 1;
+  ancilla_aux_timer[k] = 3;
+  ancilla_arr3[k] = 6;
+  ancilla_arr4[k] = 0;  // its sparkle right away
+  g_rod_puff[k] = kIcePuffFlight[GetRandomNumber() & 3];
+  int i = link_direction_facing >> 1;
+  ancilla_dir[k] = i;
+  ancilla_y_vel[k] = kIcePuff_Yvel[i];
+  ancilla_x_vel[k] = kIcePuff_Xvel[i];
+  if (Ancilla_CheckInitialTile_A(k) < 0) {
+    uint16 x = link_x_coord + kIcePuff_X[i], y = link_y_coord + kIcePuff_Y[i];
+    if (Ancilla_OffScreen(x, y, 0x100, 0x100)) {
+      ancilla_type[k] = 0;
+      return;
+    }
+    Ancilla_SetXY(k, x, y);
+  } else {
+    IceRodPuff_Burst(k);
+  }
+}
+
+// A burning flame of the FsaItems stream: drifts on slowly while it burns,
+// its smoke rises; the burst picture to draw (as ancilla_timer >> 3 for a shot):
+// the big flame, then the smoke
+static int FireRodPuff_Burn(int k) {
+  static const int8 kDrift_X[4] = {0, 0, -1, 1};
+  static const int8 kDrift_Y[4] = {-1, 1, 0, 0};
+  int t = ancilla_timer[k], j = t / kRodPuffPhase;
+  if (!submodule_index) {
+    int d = ancilla_dir[k] & 3;
+    if (j > 0 && (t & 1)) {
+      Ancilla_SetX(k, Ancilla_GetX(k) + kDrift_X[d]);
+      Ancilla_SetY(k, Ancilla_GetY(k) + kDrift_Y[d]);
+    } else if (j == 0 && (t & 1)) {
+      Ancilla_SetY(k, Ancilla_GetY(k) - 1);
+    }
+  }
+  return j ? 2 : 0;
 }
 
 void SomariaBlock_SpawnBullets(int k) {  // 8881a7
@@ -1089,9 +1205,15 @@ void Ancilla02_FireRodShot(int k) {  // 8886d2
       }
       if (coll) {
         ancilla_step[k]++;
-        ancilla_timer[k] = 31;
+        ancilla_timer[k] = g_rod_puff[k] ? kRodPuffBurn - 1 : 31;
         ancilla_numspr[k] = 8;
-        Ancilla_Sfx2_Pan(k, 0x2a);
+        if (!g_rod_puff[k])
+          Ancilla_Sfx2_Pan(k, 0x2a);
+      } else if (g_rod_puff[k] && ancilla_item_to_link[k] >= g_rod_puff[k]) {
+        // a flame of the FSA stream burns out where it got to
+        ancilla_step[k]++;
+        ancilla_timer[k] = kRodPuffBurn - 1;
+        ancilla_numspr[k] = 8;
       }
       ancilla_item_to_link[k]++;
       ancilla_dir[k] &= ~0xC;
@@ -1116,7 +1238,7 @@ void Ancilla02_FireRodShot(int k) {  // 8886d2
         FireRodShot_BecomeSkullWoodsFire(k);
       return;
     }
-    int j = ancilla_timer[k] >> 3;
+    int j = g_rod_puff[k] ? FireRodPuff_Burn(k) : ancilla_timer[k] >> 3;
     if (j != 0) {
       static const uint8 kFireShot_Draw_Char[3] = {0xa2, 0xa0, 0x8e};
       Ancilla_ShotOam(oam, sx, sy, kFireShot_Draw_Char[j - 1], flags | 2, 2);
@@ -1141,6 +1263,10 @@ void FireShot_Draw(int k) {  // 88877c
   uint16 sx = Ancilla_GetX(k) - BG2HOFS_copy2, sy = Ancilla_GetY(k) - BG2VOFS_copy2;
 
   OamEnt *oam = GetOamCurPtr();
+  if (g_rod_puff[k]) {  // the FsaItems stream: only big flames
+    Ancilla_ShotOam(oam, sx, sy, 0xa0, flags | 2, 2);
+    return;
+  }
   int j = ancilla_item_to_link[k] & 0xc;
   for (int i = 2; i >= 0; i--, oam++)
     Ancilla_ShotOam(oam, sx + kFireShot_Draw_X2[j + i], sy + kFireShot_Draw_Y2[j + i], kFireShot_Draw_Char2[i], flags | 2, 0);
@@ -1540,7 +1666,7 @@ static int Boomerang_CutGrass(int k) {
   return Overworld_BoomerangCut(x, y);
 }
 
-// Boomerang as in Four Swords Adventures (FsaBoomerang): while the button
+// Boomerang as in Four Swords Adventures (FsaItems): while the button
 // that threw it stays held, the boomerang waits in mid-air at the end of its
 // flight and comes back when the button is let go. Button 0 = Y, 1 = X,
 // 2 = L, 3 = R (an item assigned to X, L or R: GetCurrentItemButtonIndex)
@@ -1549,13 +1675,12 @@ static uint8 g_boom_btn;
 
 void Boomerang_NoteThrow(int btn) {
   g_boom_btn = btn;
-  g_boom_held = g_config.fsa_boomerang;
+  g_boom_held = g_config.fsa_items;
   g_boom_hover = false;
 }
 
 static bool Boomerang_ButtonDown(void) {
-  static const uint8 kKeys[4] = { 0, kJoypadL_X, kJoypadL_L, kJoypadL_R };
-  return g_boom_btn ? (joypad1L_last & kKeys[g_boom_btn & 3]) != 0 : (joypad1H_last & kJoypadH_Y) != 0;
+  return Link_ItemButtonHeld(g_boom_btn);
 }
 
 void Ancilla05_Boomerang(int k) {  // 8890fc
@@ -1617,7 +1742,7 @@ void Ancilla05_Boomerang(int k) {  // 8890fc
 
   if (!ancilla_item_to_link[k]) {
     if (g_boom_hover) {
-      // waiting in mid-air (FsaBoomerang): back when the button is let go
+      // waiting in mid-air (FsaItems): back when the button is let go
       if (!g_boom_held)
         g_boom_hover = false, ancilla_item_to_link[k] = 1;
     // dopo un cespuglio che nascondeva qualcosa torna indietro (e lo raccoglie)
@@ -1725,7 +1850,7 @@ void Boomerang_Draw(int k) {  // 889338
   }
   Ancilla_SetOam_Safe(GetOamCurPtr(), x, y, 0x26, kBoomerang_Flags[ancilla_G[k] * 4 + j] & ~0x30 | HIBYTE(oam_priority_value), 2);
   // trail of fading copies as in Four Swords Adventures, while it flies or hovers
-  if (g_config.fsa_boomerang && !submodule_index && ancilla_aux_timer[k]) {
+  if (g_config.fsa_items && !submodule_index && ancilla_aux_timer[k]) {
     int n = HdFx_BoomerangGhostDue();
     if (n >= 0) {
       // the poses of the copies follow FSA, not our spin: there a copy comes
@@ -2262,6 +2387,45 @@ static bool Arrow_SmashPot(int k) {
   return Ancilla_SmashPotAt(k, x, y);
 }
 
+// Bow as in Four Swords Adventures (FsaItems): arrows shot with the bow fully
+// charged (LinkItem_Bow) fly twice as fast and leave a trail of sparkles in
+// the colours of the FSA charged arrow (seen in Dolphin: pink, green, blue,
+// yellow, white in the middle), our sparkles in the fixed sprite palettes.
+// Twice as fast as two ordinary steps a frame (Ancilla09_Arrow), each one
+// checked: the ledges an arrow flies over are timed on its own steps
+static uint8 g_arrow_charged[kAncilla_Slots];
+
+void Arrow_MakeCharged(int k) {
+  g_arrow_charged[k] = 1;
+}
+
+static void AncillaAdd_ChargedArrowSparkle(int kin) {
+  static const int8 kChargedSparkle_X[4] = {-4, -4, 0, 2};
+  static const int8 kChargedSparkle_Y[4] = {0, 2, -4, -4};
+  static const uint8 kRainbow[4] = {3, 2, 4, 1};  // pink, green, blue, yellow
+  static uint8 colour;
+  // one a frame in the slots Link's items do not use, else one every other
+  // frame as the silver arrow
+  int k = -1;
+  for (int i = kAncilla_Slots - 1; i >= kAncilla_LinkSlots && k < 0; i--)
+    if (ancilla_type[i] == 0)
+      k = i;
+  if (k < 0 && !(frame_counter & 1))
+    k = Ancilla_AllocHigh();
+  if (k < 0)
+    return;
+  ancilla_type[k] = 0x3c;
+  ancilla_item_to_link[k] = 0;
+  ancilla_timer[k] = 4;
+  ancilla_step[k] = kRainbow[colour++ & 3];
+  ancilla_floor[k] = link_is_on_lower_level;
+  int m = GetRandomNumber();
+  int j = ancilla_dir[kin] & 3;
+  Ancilla_SetXY(k,
+    Ancilla_GetX(kin) + kChargedSparkle_X[j] + (m >> 4 & 7),
+    Ancilla_GetY(kin) + kChargedSparkle_Y[j] + (m & 7));
+}
+
 void Ancilla09_Arrow(int k) {  // 88a131
   static const int8 kArrow_Y[4] = {-4, 2, 0, 0};
   static const int8 kArrow_X[4] = {0, 0, -4, 4};
@@ -2278,9 +2442,15 @@ void Ancilla09_Arrow(int k) {  // 88a131
   } else {
     ancilla_item_to_link[k] = 0xff;
   }
+  int steps = g_arrow_charged[k] ? 2 : 1;
+next_step:
   Ancilla_MoveY(k);
   Ancilla_MoveX(k);
-  if (link_item_bow & 4 && !(frame_counter & 1))
+  if (g_arrow_charged[k]) {
+    if (steps == 2)
+      AncillaAdd_ChargedArrowSparkle(k);
+  }
+  else if (link_item_bow & 4 && !(frame_counter & 1))
     AncillaAdd_SilverArrowSparkle(k);
   ancilla_S[k] = 255;
   // come su GBA (0x811a7f8) il vaso si guarda prima dei nemici: la freccia
@@ -2316,6 +2486,8 @@ void Ancilla09_Arrow(int k) {  // 88a131
     Ancilla_SetY(k, Ancilla_GetY(k) + kArrow_Y[j]);
     byte_7E0B88 = 0;
   } else {
+    if (--steps)
+      goto next_step;
     Arrow_Draw(k);
     return;
   }
@@ -2475,6 +2647,8 @@ void Ancilla0B_IceRodShot(int k) {  // 88a4dd
         ancilla_numspr[k] = kAncilla_Pflags[0x11];
         ancilla_item_to_link[k] = 0;
         ancilla_aux_timer[k] = 4;
+      } else if (g_rod_puff[k] && --g_rod_puff[k] == 0) {
+        IceRodPuff_Burst(k);  // the end of a short shot of the stream
       }
     }
   }
@@ -3739,12 +3913,45 @@ void Ancilla3B_SwordUpSparkle(int k) {  // 88c167
   }
 }
 
+// Tip of the arrow nocked on the drawn bow (FsaItems, AncillaAdd_NockedArrow),
+// from Link's position: where its charge flash and sparkles shine
+// (Ancilla0D_SpinAttackFullChargeSpark, AncillaAdd_BowChargeSparkle). The
+// corner of their 8x8 piece, so that its middle falls on the tip pixel,
+// measured on the frames: up 7,5 (behind his head), down 7,25, left -8,15,
+// right 23,15. Facing up they are drawn behind Link as the arrow
+static const int8 kBowTip_X[4] = {3, 3, -12, 19};
+static const int8 kBowTip_Y[4] = {1, 21, 11, 11};
+
+// The bow drawn facing up (FsaItems): its flash and sparkles behind Link
+static bool BowTip_BehindLink(void) {
+  return (link_item_in_hand & 0x10) && link_direction_facing == 0;
+}
+
 void Ancilla3C_SpinAttackChargeSparkle(int k) {  // 88c1ea
   static const uint8 kSwordChargeSpark_Char[3] = {0xb7, 0x80, 0x83};
   static const uint8 kSwordChargeSpark_Flags[3] = {4, 4, 0x84};
   // pozione d'oro (ancilla_step 1): BS Zelda usa la sua ancilla 0x44 (8cc41)
   // con gli stessi disegni e la tavolozza sprite 1 (8cc3e: 02 02 82)
   static const uint8 kGoldSpark_Flags[3] = {2, 2, 0x82};
+
+  // ancilla_step 8: the arrow nocked on the drawn bow (FsaItems), the whole
+  // flying arrow (Arrow_Draw), while LinkItem_Bow keeps renewing its timer. It
+  // stays alive through the drawing: with the view moved its pieces find their
+  // height from the nearest live object (ResolveSpritePositions), and gone it
+  // lost half of itself to an enemy 256 pixels higher. In front of Link,
+  // except facing up where his body hides it (the OAM regions after his own)
+  if (ancilla_step[k] == 8) {
+    if (!ancilla_timer[k]) {
+      ancilla_type[k] = 0;
+      return;
+    }
+    if ((ancilla_dir[k] & 3) == 0)
+      Ancilla_AllocateOamFromRegion_B_or_E(8);
+    else
+      ancilla_oam_idx[k] = Ancilla_AllocateOamFromRegion_A_or_D_or_F(k, 8);
+    Arrow_Draw(k);
+    return;
+  }
 
   if (!submodule_index && !ancilla_timer[k]) {
     ancilla_timer[k] = 4;
@@ -3753,12 +3960,20 @@ void Ancilla3C_SpinAttackChargeSparkle(int k) {  // 88c1ea
       return;
     }
   }
-  ancilla_oam_idx[k] = Ancilla_AllocateOamFromRegion_A_or_D_or_F(k, 4);
+  // the bow's sparkle facing up (step 0, bow in hand): behind Link
+  if (ancilla_step[k] == 0 && BowTip_BehindLink())
+    Ancilla_AllocateOamFromRegion_B_or_E(4);
+  else
+    ancilla_oam_idx[k] = Ancilla_AllocateOamFromRegion_A_or_D_or_F(k, 4);
   Point16U info;
   Ancilla_PrepOamCoord(k, &info);
   int j = ancilla_item_to_link[k];
+  uint8 flags = (ancilla_step[k] == 1 ? kGoldSpark_Flags : kSwordChargeSpark_Flags)[j];
+  // ancilla_step 2-4: the sprite palette of a coloured sparkle (FsaItems)
+  if (ancilla_step[k] >= 2)
+    flags = (flags & 0xf1) | (ancilla_step[k] & 7) << 1;
   Ancilla_SetOam(GetOamCurPtr(), info.x, info.y,
-                 kSwordChargeSpark_Char[j], (ancilla_step[k] == 1 ? kGoldSpark_Flags : kSwordChargeSpark_Flags)[j] | HIBYTE(oam_priority_value), 0);
+                 kSwordChargeSpark_Char[j], flags | HIBYTE(oam_priority_value), 0);
 }
 
 void Ancilla35_MasterSwordReceipt(int k) {  // 88c25f
@@ -5084,7 +5299,11 @@ void Ancilla0D_SpinAttackFullChargeSpark(int k) {  // 88ddca
   static const int8 kSwordFullChargeSpark_X[4] = {4, 4, -13, 20};
   static const uint8 kSwordFullChargeSpark_Flags[4] = {0x20, 0x10, 0x30, 0x20};
 
-  ancilla_oam_idx[k] = Ancilla_AllocateOamFromRegion_A_or_D_or_F(k, 4);
+  // the bow charged facing up (FsaItems): behind Link, as the nocked arrow
+  if (BowTip_BehindLink())
+    Ancilla_AllocateOamFromRegion_B_or_E(4);
+  else
+    ancilla_oam_idx[k] = Ancilla_AllocateOamFromRegion_A_or_D_or_F(k, 4);
 
   if (!ancilla_timer[k]) {
     ancilla_type[k] = 0;
@@ -5095,6 +5314,11 @@ void Ancilla0D_SpinAttackFullChargeSpark(int k) {  // 88ddca
 
   uint16 x = link_x_coord + kSwordFullChargeSpark_X[j] - BG2HOFS_copy2;
   uint16 y = link_y_coord + kSwordFullChargeSpark_Y[j] - BG2VOFS_copy2;
+  // the bow charged (FsaItems): on its tip
+  if (link_item_in_hand & 0x10) {
+    x = link_x_coord + kBowTip_X[j] - BG2HOFS_copy2;
+    y = link_y_coord + kBowTip_Y[j] - BG2VOFS_copy2;
+  }
 
   oam_priority_value = kSwordFullChargeSpark_Flags[ancilla_floor[k]] << 8;
   OamEnt *oam = GetOamCurPtr();
@@ -6547,6 +6771,86 @@ void AncillaAdd_ChargedSpinAttackSparkle() {  // 898cb1
   }
 }
 
+// The bow fully charged (FsaItems): the flash of the sword's full charge, a bit
+// longer, on the tip of the bow (Ancilla0D_SpinAttackFullChargeSpark)
+void AncillaAdd_BowChargeFlash(void) {
+  for (int k = kAncilla_Slots - 1; k >= 0; k--) {
+    // a sparkle, not the nocked arrow (ancilla_step 8)
+    if (ancilla_type[k] == 0 || ancilla_type[k] == 0x3c && ancilla_step[k] != 8) {
+      ancilla_type[k] = 13;
+      ancilla_floor[k] = link_is_on_lower_level;
+      ancilla_timer[k] = 10;
+      break;
+    }
+  }
+}
+
+// Where the arrow leaves the bow (AncillaAdd_Arrow), from Link's position + 8 in y
+static const int8 kShootBow_X[4] = {4, 4, 0, 4};
+static const int8 kShootBow_Y[4] = {-4, 3, 4, 4};
+
+// The arrow nocked on the bow (FsaItems): the notch of the whole arrow on the
+// string of Link's drawn bow, measured on the frames: string 12 px right of
+// Link facing right, 3 px facing left, 14 px below his position facing down
+// (where the arrow already left); facing up as it leaves, behind Link
+static const int8 kNockBow_X[4] = {4, 4, -9, 9};
+
+static int NockedArrow_Find(void) {
+  for (int k = kAncilla_Slots - 1; k >= 0; k--)
+    if (ancilla_type[k] == 0x3c && ancilla_step[k] == 8)
+      return k;
+  return -1;
+}
+
+// The arrow nocked on the drawn bow (FsaItems), normal or being charged:
+// renewed every frame the bow is drawn, it goes away by itself one frame after
+// (Ancilla3C_SpinAttackChargeSparkle with ancilla_step 8)
+void AncillaAdd_NockedArrow(void) {
+  int k = NockedArrow_Find();
+  if (k < 0 && (k = Ancilla_AllocHigh()) < 0)
+    return;
+  int j = link_direction_facing >> 1;
+  ancilla_type[k] = 0x3c;
+  ancilla_step[k] = 8;
+  ancilla_timer[k] = 2;
+  ancilla_item_to_link[k] = 0xff;  // the whole arrow (Arrow_Draw)
+  ancilla_dir[k] = j | 4;
+  ancilla_H[k] = 0;
+  ancilla_objprio[k] = 0;
+  ancilla_floor[k] = link_is_on_lower_level;
+  Ancilla_SetXY(k, link_x_coord + kNockBow_X[j], link_y_coord + 8 + kShootBow_Y[j]);
+}
+
+// The arrow just shot (FsaItems): it leaves from the string, where it was
+// nocked, already whole and moving; facing up as in the original (it waits
+// unseen behind Link, else it would show over his head)
+void Arrow_StartOnBow(int k) {
+  int n = NockedArrow_Find();
+  if (n >= 0)
+    ancilla_type[n] = 0;
+  int j = ancilla_dir[k] & 3;
+  if (j == 0)
+    return;
+  ancilla_item_to_link[k] = 0;
+  Ancilla_SetXY(k, link_x_coord + kNockBow_X[j], link_y_coord + 8 + kShootBow_Y[j]);
+}
+
+// The bow kept charged (FsaItems): a sparkle twinkling on its tip, as on the
+// sword being charged (AncillaSpawn_SwordChargeSparkle)
+void AncillaAdd_BowChargeSparkle(void) {
+  int k = Ancilla_AllocHigh();
+  if (k < 0)
+    return;
+  ancilla_type[k] = 0x3c;
+  ancilla_item_to_link[k] = 0;
+  ancilla_timer[k] = 4;
+  ancilla_step[k] = 0;
+  ancilla_floor[k] = link_is_on_lower_level;
+  int j = link_direction_facing >> 1;
+  uint8 r = GetRandomNumber();
+  Ancilla_SetXY(k, link_x_coord + kBowTip_X[j] + (r & 3) - 1, link_y_coord + kBowTip_Y[j] + (r >> 4 & 3) - 1);
+}
+
 void AncillaAdd_ExplodingWeatherVane(uint8 a, uint8 y) {  // 898d11
   static const int8 kWeathervane_Tab4[12] = {8, 10, 9, 4, 11, 12, -10, -8, 4, -6, -10, -4};
   static const int8 kWeathervane_Tab5[12] = {20, 22, 20, 20, 22, 20, 20, 22, 20, 22, 20, 20};
@@ -6723,8 +7027,6 @@ void AncillaAdd_BlastWallFireball(uint8 a, uint8 y, int r4) {  // 899031
 }
 
 int AncillaAdd_Arrow(uint8 a, uint8 ax, uint8 ay, uint16 xcoord, uint16 ycoord) {  // 8990a4
-  static const int8 kShootBow_X[4] = {4, 4, 0, 4};
-  static const int8 kShootBow_Y[4] = {-4, 3, 4, 4};
   static const int8 kShootBow_Xvel[4] = {0, 0, -48, 48};
   static const int8 kShootBow_Yvel[4] = {-48, 48, 0, 0};
 
@@ -6740,6 +7042,7 @@ int AncillaAdd_Arrow(uint8 a, uint8 ax, uint8 ay, uint16 xcoord, uint16 ycoord) 
   if (k >= 0) {
     sound_effect_1 = Link_CalculateSfxPan() | 7;
     ancilla_H[k] = 0;
+    g_arrow_charged[k] = 0;
     ancilla_item_to_link[k] = 8;
     int j = ax >> 1;
     ancilla_dir[k] = j | 4;
@@ -7126,6 +7429,7 @@ void AncillaAdd_IceRodShot(uint8 a, uint8 y) {  // 899863
     return;
   }
   sound_effect_1 = Link_CalculateSfxPan() | 15;
+  g_rod_puff[k] = 0;
   ancilla_step[k] = 0;
   ancilla_arr25[k] = 0;
   ancilla_item_to_link[k] = 255;

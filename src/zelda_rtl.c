@@ -706,6 +706,7 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
       HdFx_Fog(pixel_buffer, (int)pitch, frame_w, height, g_render_bias_x, g_render_bias_y);
       HdLight_FairyGlow(pixel_buffer, (int)pitch, frame_w, height);
       HdFx_Lightning(pixel_buffer, (int)pitch, frame_w, height);
+      HdFx_HammerWaves(pixel_buffer, (int)pitch, frame_w, height, g_render_bias_x, g_render_bias_y);
     }
     HdFx_Mosaic(pixel_buffer, (int)pitch, frame_w, height);
     // dissolvenza delle palette del gioco su tutto, aggiunte HD comprese

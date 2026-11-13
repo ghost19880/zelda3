@@ -354,7 +354,7 @@ static const PlainOption kPlainOptions[] = {
   OPT(4, "ItemOnLR", item_on_lr), OPT(4, "GbaHud", gba_hud),
   BIT(4, "GoldPotion", GoldPotion), BIT(4, "ItemsRefillResources", ItemsRefillResources),
   BIT(4, "IcePalaceGba", IcePalaceGba), BIT(4, "SaveHeartsAndMagic", SaveHeartsAndMagic),
-  OPT(4, "FsaBoomerang", fsa_boomerang), OPT(4, "EnchantedRocks", enchanted_rocks), OPT(4, "LakeClearing", lake_clearing),
+  OPT(4, "FsaItems", fsa_items), OPT(4, "EnchantedRocks", enchanted_rocks), OPT(4, "LakeClearing", lake_clearing),
   BIT(4, "GbaMinorFixes", GbaMinorFixes), BIT(4, "BirdTravelPoint9", BirdTravel9),
   BIT(4, "FastTransitions", FastTransitions), BIT(4, "ContinuousWorld", ContinuousWorld),
   BIT(4, "ModernHud", ModernHud), BIT(4, "DungeonNames", DungeonNames),

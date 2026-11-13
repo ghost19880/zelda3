@@ -30,10 +30,15 @@ shader3 = 04-stretch.glsl
 filter_linear3 = true
 
 # Pennellate di Four Swords: piastrella continua, ripetuta in diagonale
-textures = "FSABrush"
+textures = "FSABrush;FSAClouds"
 FSABrush = fsa_brush.png
 FSABrush_linear = true
 FSABrush_wrap_mode = repeat
+
+# Ombre di nuvole: le due sagome disegnate, piastrella ripetuta (fsa_clouds.inc)
+FSAClouds = fsa_clouds.png
+FSAClouds_linear = true
+FSAClouds_wrap_mode = repeat
 
 # --- Regolazioni ---------------------------------------------------------
 # Per cambiare un valore modifica il numero (a gioco spento). Una riga che

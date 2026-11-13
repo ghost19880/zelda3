@@ -2462,15 +2462,80 @@ void Player_Sword_SpinAttackJerks_HoldDown() {  // 879d9f
   CalculateSwordHitBox();
 }
 
+// Items held down as in Four Swords Adventures (FsaItems): the item
+// button that started the action, as GetCurrentItemButtonIndex gives it
+// (0 = Y, 1 = X, 2 = L, 3 = R)
+static uint8 g_item_btn;
+
+// Unique rule: true while the item button btn is held (the boomerang uses it
+// too). The X, L and R items are not turned into Y once an item is in hand
+bool Link_ItemButtonHeld(int btn) {
+  static const uint8 kKeys[4] = { 0, kJoypadL_X, kJoypadL_L, kJoypadL_R };
+  return btn ? (joypad1L_last & kKeys[btn & 3]) != 0 : (joypad1H_last & kJoypadH_Y) != 0;
+}
+
+// LinkCheckMagicCost without the "not enough magic" message
+static bool Link_PayMagicQuietly(uint8 x) {
+  uint8 cost = kLinkItem_MagicCosts[x * 3 + link_magic_consumption];
+  uint8 a = link_magic_power;
+  if (a && (a -= cost) < 0x80) {
+    link_magic_power = a;
+    return true;
+  }
+  return false;
+}
+
+// Fire Rod as in Four Swords Adventures (FsaItems): with the button held
+// until the rod points ahead it stays out and keeps a stream of flames coming
+// (AncillaAdd_FireRodPuff), a new one every kRodPuffEvery frames, with no shot
+// first; a tap still shoots the classic shot, as the button goes up. The Ice
+// Rod does the same with its own shots (AncillaAdd_IceRodPuff). FSA has no
+// magic: here the stream costs one shot of magic every kRodStreamPay frames
+// (the first one paid on the press) and stops when the magic runs out
+enum { kRodPuffEvery = 4, kRodStreamPay = 32, kRodStreamSfx = 16 };
+static uint16 g_rod_stream;
+static bool g_rod_shot_waits;
+
+static bool LinkRod_Stream(void) {
+  if (!g_config.fsa_items || !Link_ItemButtonHeld(g_item_btn))
+    return false;
+  g_rod_stream++;
+  if (g_rod_stream % kRodStreamPay == 0 && !Link_PayMagicQuietly(0))
+    return false;
+  bool fire = eq_selected_rod == 1;
+  if (g_rod_stream % kRodPuffEvery == 1)
+    fire ? AncillaAdd_FireRodPuff() : AncillaAdd_IceRodPuff();
+  if (g_rod_stream % kRodStreamSfx == 1) {
+    if (fire)
+      Ancilla_Sfx2_Near(0xe);
+    else
+      sound_effect_1 = Link_CalculateSfxPan() | 15;
+  }
+  return true;
+}
+
+// The classic shot of the rod in hand
+static void LinkRod_Shot(void) {
+  if (eq_selected_rod == 1)
+    AncillaAdd_FireRodShot(2, 1);
+  else
+    AncillaAdd_IceRodShot(11, 1);
+}
+
 void LinkItem_Rod() {  // 879eef
   static const uint8 kRodAnimDelays[] = { 3, 3, 5 };
   if (!(button_mask_b_y & 0x40)) {
     if (is_standing_in_doorway || !CheckYButtonPress())
       return;
+    g_item_btn = GetCurrentItemButtonIndex();
+    g_rod_stream = 0;
+    g_rod_shot_waits = false;
     if (!LinkCheckMagicCost(0))
       goto out;
     link_debug_value_2 = 1;
-    if (eq_selected_rod == 1)
+    if (g_config.fsa_items)
+      g_rod_shot_waits = true;
+    else if (eq_selected_rod == 1)
       AncillaAdd_FireRodShot(2, 1);
     else
       AncillaAdd_IceRodShot(11, 1);
@@ -2481,8 +2546,21 @@ void LinkItem_Rod() {  // 879eef
   }
   HaltLinkWhenUsingItems();
   link_direction &= ~0xf;
+  // FsaItems: a tap shoots the classic shot as the button goes up
+  if (g_rod_shot_waits && !Link_ItemButtonHeld(g_item_btn)) {
+    g_rod_shot_waits = false;
+    LinkRod_Shot();
+  }
   if (!sign8(--link_delay_timer_spin_attack))
     return;
+  // the rod held out: the stream instead of the shot (FsaItems)
+  if (player_handler_timer == 2) {
+    g_rod_shot_waits = false;
+    if (LinkRod_Stream()) {
+      link_delay_timer_spin_attack = 0;
+      return;
+    }
+  }
   player_handler_timer++;
 
   link_delay_timer_spin_attack = kRodAnimDelays[player_handler_timer];
@@ -2523,6 +2601,12 @@ void LinkItem_Hammer() {  // 879f7b
     TileDetect_MainHandler(3);
     Ancilla_AddHitStars(22, 0);
     HdRumble(kRumble_Hammer);
+    if (g_config.fsa_items) {
+      // shock wave from between the two hit stars (Ancilla_AddHitStars)
+      static const int8 kHammerWaveX[4] = { 2, 13, -6, 22 }, kHammerWaveY[4] = { 7, 25, 20, 20 };
+      int i = link_direction_facing >> 1;
+      HdFx_HammerWave(link_x_coord + kHammerWaveX[i], link_y_coord + kHammerWaveY[i]);
+    }
     if (sound_effect_1 == 0) {
       Ancilla_Sfx2_Near(16);
       SpawnHammerWaterSplash();
@@ -2536,12 +2620,39 @@ void LinkItem_Hammer() {  // 879f7b
   }
 }
 
+// Bow as in Four Swords Adventures (FsaItems): with the button still held when
+// the arrow would leave, Link keeps the bow drawn and charges it. Values from
+// the FSA code (main.dol, Link's bow state 58): the charge counts one a frame
+// up to 48; there two sparkle effects light up on the tip with a sound and the
+// arrow shot then is a charged one (its sparkles: Ancilla09_Arrow). In FSA the
+// charged arrow flies as fast as the plain one; here, as asked, twice as fast
+enum { kBowFullCharge = 48 };
+static uint8 g_bow_charge;
+
+static bool LinkBow_Charge(void) {
+  if (!g_config.fsa_items || !Link_ItemButtonHeld(g_item_btn) || archery_game_out_of_arrows ||
+      !link_num_arrows && !archery_game_arrows_left)
+    return false;
+  if (g_bow_charge < kBowFullCharge) {
+    if (++g_bow_charge == kBowFullCharge) {
+      Ancilla_Sfx2_Near(55);
+      HdRumble(kRumble_SpinReady);
+      AncillaAdd_BowChargeFlash();
+    }
+  } else if ((frame_counter & 3) == 0) {
+    AncillaAdd_BowChargeSparkle();
+  }
+  return true;
+}
+
 void LinkItem_Bow() {  // 87a006
   static const uint8 kBowDelays[] = { 3, 3, 8 };
 
   if (!(button_mask_b_y & 0x40)) {
     if (is_standing_in_doorway || !CheckYButtonPress())
       return;
+    g_item_btn = GetCurrentItemButtonIndex();
+    g_bow_charge = 0;
     link_cant_change_direction |= 1;
     link_delay_timer_spin_attack = kBowDelays[0];
     link_animation_steps = 0;
@@ -2550,8 +2661,17 @@ void LinkItem_Bow() {  // 87a006
   }
   HaltLinkWhenUsingItems();
   link_direction &= ~0xf;
+  // the arrow on the drawn bow until it leaves, normal or charged (FsaItems)
+  if (g_config.fsa_items && player_handler_timer == 2 && !archery_game_out_of_arrows &&
+      (link_num_arrows || archery_game_arrows_left))
+    AncillaAdd_NockedArrow();
   if (!sign8(--link_delay_timer_spin_attack))
     return;
+  // the bow kept drawn while charging (FsaItems)
+  if (player_handler_timer == 2 && LinkBow_Charge()) {
+    link_delay_timer_spin_attack = 0;
+    return;
+  }
   player_handler_timer++;
 
   link_delay_timer_spin_attack = kBowDelays[player_handler_timer];
@@ -2571,7 +2691,14 @@ void LinkItem_Bow() {  // 87a006
       ancilla_type[obj] = 0;
       Ancilla_Sfx2_Near(60);
     }
+    if (ancilla_type[obj] == 9 && g_bow_charge >= kBowFullCharge)
+      Arrow_MakeCharged(obj);
+    // FsaItems: the arrow seen on the bow leaves at once from the string,
+    // without the 4 frames it waits unseen in the original (Ancilla09_Arrow)
+    if (g_config.fsa_items && ancilla_type[obj] == 9)
+      Arrow_StartOnBow(obj);
   }
+  g_bow_charge = 0;
 
   player_handler_timer = 0;
   link_delay_timer_spin_attack = 0;

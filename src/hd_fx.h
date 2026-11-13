@@ -230,6 +230,10 @@ void HdFx_ResetAfterLoad(void);
 // flight (hd_fx.c)
 int HdFx_BoomerangGhostDue(void);
 void HdFx_BoomerangGhost(int wx, int wy, int tile, uint8 flags);
+// Four Swords Adventures hammer (FsaItems): shock wave from the world point
+// (wx, wy) where the hammer hit the ground (hd_fx.c)
+void HdFx_HammerWave(int wx, int wy);
+void HdFx_HammerWaves(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y);
 
 // Screen brightness of the frame being drawn (INIDISP, 0 = black or forced
 // blank): the PPU and the HD effects draw at 15 and the picture is dimmed at

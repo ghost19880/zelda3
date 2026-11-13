@@ -95,8 +95,10 @@ typedef struct Config {
   bool gba_damage, flipper_dive, stuck_arrows;
   // Giravolta Tornado come su GBA, sbloccata dal Retino per Farfalle
   bool hurricane_spin;
-  // Boomerang as in Four Swords Adventures: holding the button keeps it in mid-air
-  bool fsa_boomerang;
+  // Items as in Four Swords Adventures, holding the button: the boomerang
+  // waits in mid-air, the bow charges a faster arrow, the Fire and Ice Rods
+  // keep a stream coming; the hammer blow sends out a shock wave
+  bool fsa_items;
   // Oggetti assegnabili al tasto X e ai tasti L e R nel menu degli oggetti
   // (divise da ItemSwitchLR, che ora e' solo il cambio rapido con L e R)
   bool item_on_x, item_on_lr;

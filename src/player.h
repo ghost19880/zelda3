@@ -115,6 +115,8 @@ void HandleSwordControls();
 void Link_ResetSwordAndItemUsage();
 void Player_Sword_SpinAttackJerks_HoldDown();
 void LinkItem_Rod();
+// true while the item button btn (0 = Y, 1 = X, 2 = L, 3 = R) is held
+bool Link_ItemButtonHeld(int btn);
 void LinkItem_Hammer();
 void LinkItem_Bow();
 void LinkItem_Boomerang();

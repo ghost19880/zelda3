@@ -50,6 +50,14 @@ void Ancilla_Sfx1_Pan(int k, uint8 v);
 void Ancilla_Sfx2_Pan(int k, uint8 v);
 void Ancilla_Sfx3_Pan(int k, uint8 v);
 void AncillaAdd_FireRodShot(uint8 type, uint8 y);
+// Four Swords Adventures items held down (FsaItems)
+void AncillaAdd_FireRodPuff(void);
+void AncillaAdd_IceRodPuff(void);
+void AncillaAdd_BowChargeFlash(void);
+void AncillaAdd_BowChargeSparkle(void);
+void AncillaAdd_NockedArrow(void);
+void Arrow_StartOnBow(int k);
+void Arrow_MakeCharged(int k);
 void SomariaBlock_SpawnBullets(int k);
 void Ancilla_Main();
 ProjectSpeedRet Ancilla_ProjectReflexiveSpeedOntoSprite(int k, uint16 x, uint16 y, uint8 vel);

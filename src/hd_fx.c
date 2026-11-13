@@ -237,7 +237,7 @@ static void ApplyHeatHaze(uint8 *pixels, int pitch, int width, int height, int c
 }
 
 // ---------------------------------------------------------------------------
-// Boomerang trail as in Four Swords Adventures (FsaBoomerang): the boomerang
+// Boomerang trail as in Four Swords Adventures (FsaItems): the boomerang
 // leaves copies of itself, frozen in the pose of that moment and fixed in the
 // world, that fade out evenly. Values from the FSA code (main.dol, afterimage
 // type 17 used by the boomerang): a copy every 4 frames, each one lasting 20
@@ -352,6 +352,147 @@ static void DrawBoomerangGhosts(uint8 *pixels, int pitch, int width, int height,
         int cg = IntMin((col >> 5 & 31) * 255 / 31 + 127, 255);
         int cb = IntMin((col >> 10 & 31) * 255 / 31 + 127, 255);
         row[x] = (HdFx_MixRgb(row[x], cr, cg, cb, a) & 0xffffff) | 4u << 24;
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Hammer blow as in Four Swords Adventures (FsaItems). Measured in Dolphin on
+// FSA's plain hammer blow, frame by frame against the frame before the hit (a
+// sprite pixel of FSA is one of ours, FSA runs at 50 Hz: times * 1.2):
+// - the ground near the hit drops 6.5 pixels at once (all of it up to 25
+//   pixels away, less and less up to 85), comes back to 3.5 in 5 frames and
+//   then snaps back, Link and the enemies on it as well: the screen far away
+//   does not move;
+// - a veil opens out from the hit, a disc brighter towards its edge (at most
+//   about 15% towards white) with a soft rim, out to 52 pixels in 12 frames,
+//   fast at first and slowing down (radius = 52 * (1 - (1 - u)^2));
+// - a pale cloud about 10 pixels wide stays on the hit for 15 frames and then
+//   fades out in about 20.
+// Our own drawing of those numbers: nothing from FSA.
+enum {
+  kHammerWaves = 4,
+  kHammerWaveLife = 14, kHammerWaveRadius = 52,  // veil
+  kHammerJoltLife = 6, kHammerJoltReach = 85,    // ground drop
+  kHammerPuffHold = 18, kHammerPuffLife = 42,    // cloud on the hit
+  kHammerWaveBox = 2 * (kHammerJoltReach + 10),
+};
+
+typedef struct HammerWave {
+  int16 x, y;  // world position of the hit
+  uint8 age;
+  bool on;
+} HammerWave;
+
+static HammerWave g_hammer_wave[kHammerWaves];
+static uint8 g_hammer_wave_frame;
+
+void HdFx_HammerWave(int wx, int wy) {
+  HammerWave *w = &g_hammer_wave[0];
+  for (int i = 0; i < kHammerWaves; i++) {
+    HammerWave *t = &g_hammer_wave[i];
+    if (!t->on) {
+      w = t;
+      break;
+    }
+    if (t->age > w->age)
+      w = t;
+  }
+  w->x = (int16)wx, w->y = (int16)wy;
+  w->age = 0;
+  w->on = true;
+}
+
+// Drawn after the HD water, the fog and the other HD effects (zelda_rtl.c):
+// the ground drop moves the finished picture, so the water drawn over its
+// tiles and the water marks the shader reads move with the shore instead of
+// staying where the ground was (stripes along the edge of the water).
+void HdFx_HammerWaves(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y) {
+  int mod;
+  if (!HdFx_InGameplay(&mod))
+    return;
+  // the blows age with the game frames (not while the game is paused)
+  bool step = g_hammer_wave_frame != frame_counter;
+  g_hammer_wave_frame = frame_counter;
+  static uint32 src[kHammerWaveBox * kHammerWaveBox];
+  int ext = (width - 256) / 2;
+  int cam_x = BG2HOFS_copy2 + bias_x, cam_y = BG2VOFS_copy2 + bias_y;
+  for (int i = 0; i < kHammerWaves; i++) {
+    HammerWave *w = &g_hammer_wave[i];
+    if (w->on && step && ++w->age >= kHammerPuffLife)
+      w->on = false;
+    if (!w->on)
+      continue;
+    int t = w->age - 1;  // 0 in the first frame drawn
+    // ground drop: 6.5 pixels, 3.5 after 5 frames, gone after 6
+    float drop = t < kHammerJoltLife ? 6.5f - 3.0f * t / (kHammerJoltLife - 1) : 0;
+    // veil
+    float u = (float)w->age / kHammerWaveLife, v = 1 - u;
+    bool veil = u < 1;
+    float r = veil ? kHammerWaveRadius * (1 - v * v) : 0;
+    float veil_a = veil ? 0.16f * (v < 0.8f ? v / 0.8f : 1) : 0;
+    // cloud on the hit
+    float puff_a = t < kHammerPuffHold ? 0.3f :
+        0.3f * (float)(kHammerPuffLife - 1 - t) / (kHammerPuffLife - 1 - kHammerPuffHold);
+    float reach = 14;
+    if (veil && r + 4 > reach)
+      reach = r + 4;
+    if (drop > 0)
+      reach = kHammerJoltReach + 8;
+    float cx = (float)(w->x - cam_x + ext), cy = (float)(w->y - cam_y);
+    int x0 = (int)floorf(cx - reach), y0 = (int)floorf(cy - reach);
+    int bw = (int)ceilf(2 * reach), bh = bw;
+    if (bw > kHammerWaveBox)
+      bw = bh = kHammerWaveBox;
+    if (x0 + bw <= 0 || y0 + bh <= 0 || x0 >= width || y0 >= height)
+      continue;
+    // copy of the box as it was, so the moved pixels are read from the ground
+    for (int y = 0; y < bh; y++)
+      for (int x = 0; x < bw; x++) {
+        int px = x0 + x, py = y0 + y;
+        src[y * bw + x] = (px >= 0 && py >= 0 && px < width && py < height) ?
+            ((uint32 *)(pixels + py * pitch))[px] : 0x02000000;  // outside: like the HUD, never read
+      }
+    for (int y = 0; y < bh; y++) {
+      int py = y0 + y;
+      if (py < 0 || py >= height)
+        continue;
+      uint32 *row = (uint32 *)(pixels + py * pitch);
+      for (int x = 0; x < bw; x++) {
+        int px = x0 + x;
+        if (px < 0 || px >= width)
+          continue;
+        uint32 c = src[y * bw + x];
+        if ((c >> 24) == 2)
+          continue;  // the HUD stays
+        float dx = px + 0.5f - cx, dy = py + 0.5f - cy;
+        float d = sqrtf(dx * dx + dy * dy);
+        // the ground moved down, with whatever stands on it: read it higher
+        // up, whole pixels so the drawings stay sharp
+        if (drop > 0 && d < kHammerJoltReach) {
+          float shift = drop * (d <= 25 ? 1 : (kHammerJoltReach - d) / (kHammerJoltReach - 25));
+          int iy = y - (int)(shift + 0.5f);
+          if (iy != y) {
+            uint32 s = iy >= 0 ? src[iy * bw + x] : 0x02000000;
+            if ((s >> 24) != 2)
+              c = s;
+          }
+        }
+        row[px] = c;
+        if (HdFx_IsHudOrSprite(c))
+          continue;  // the veil and the cloud only on the ground
+        // veil: brighter towards the rim, soft outside it
+        float a = 0;
+        if (veil) {
+          float e = d - r;
+          if (e < 3)
+            a = veil_a * (e >= 0 ? 1 - e / 3 : HdFx_Smooth(0.45f * r, r, d));
+        }
+        // cloud on the hit
+        if (puff_a > 0 && d < 20)
+          a += puff_a * expf(-(d / 7) * (d / 7));
+        row[px] = a > 0.003f ? HdFx_MixRgb(c, 255, 255, 255, a > 1 ? 1 : a) : c;
       }
     }
   }
@@ -3083,4 +3224,5 @@ void HdFx_ResetAfterLoad(void) {
   g_shaft_room = -1;
   g_flash = 0, g_flash_rise = false;
   memset(g_boom_ghost, 0, sizeof(g_boom_ghost));
+  memset(g_hammer_wave, 0, sizeof(g_hammer_wave));
 }
