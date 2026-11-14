@@ -435,7 +435,7 @@ static void CollectLights(const uint8 *pixels, int pitch, int height, int mod, b
       AddFireLight(x, y, radius, 0.55f, 0.32f, 0.10f, 0.6f);
   }
   // Cespugli ed erba in fiamme (hd_burn.c): un po' di luce calda e le braci
-  if (mod == 9) {
+  if (HdFx_OutdoorScene(mod)) {
     const HdBurnTile *tiles;
     int n = HdBurn_GetBurning(&tiles);
     // con il Medaglione della Fiamma le tile sono centinaia: una luce ogni

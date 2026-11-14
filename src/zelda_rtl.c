@@ -467,6 +467,8 @@ static void ApplyRenderBias() {
 extern uint8 g_link_oam_ground[128];  // player_oam.c
 int LinkOam_DrawnHeight(void);        // player_oam.c
 extern uint8 g_link_oam_mask[128], g_link_oam_real_f0[128], g_sprite_oam_owner[128], g_oam_real_f0[128];
+extern uint8 g_ancilla_oam_owner[128];  // ancilla.c
+extern uint16 g_ancilla_oam_frame[128];
 
 // Fra v + k*period sceglie il valore la cui posizione sullo schermo (v - bias)
 // cade nella finestra [lo, lo + period)
@@ -497,7 +499,7 @@ static void ResolveSpritePositions(Ppu *ppu) {
   // Si confronta anche la x: un nemico fermo 256 pixel piu' in alto ma
   // lontano in orizzontale non deve "rubare" i pezzi di uno sprite vicino
   // (il corpo del vecchio della Montagna spariva sopra lo schermo)
-  int oy[32], ox[32], n = 0, cy = BG2VOFS_copy2, cx = BG2HOFS_copy2;
+  int oy[40], ox[40], n = 0, cy = BG2VOFS_copy2, cx = BG2HOFS_copy2;
   int slot[16];  // posto di ogni nemico in oy/ox, -1 = non attivo
   oy[n] = (int16)(link_y_coord - cy), ox[n++] = link_x - 8;
   // Link in the air (any fall or jump: cliffs, ledges, holes, knock-back) is
@@ -516,10 +518,27 @@ static void ResolveSpritePositions(Ppu *ppu) {
       oy[n] = (int16)((sprite_y_hi[k] << 8 | sprite_y_lo[k]) - sprite_z[k] - cy);
       ox[n++] = (int16)((sprite_x_hi[k] << 8 | sprite_x_lo[k]) - cx);
     }
-  for (int k = 0; k < kAncilla_Slots && n < 32; k++)
-    if (ancilla_type[k]) {
-      oy[n] = (int16)((ancilla_y_hi[k] << 8 | ancilla_y_lo[k]) - cy);
-      ox[n++] = (int16)((ancilla_x_hi[k] << 8 | ancilla_x_lo[k]) - cx);
+  // place of each ancilla in oy/ox, -1 = not active or far from the view.
+  // The medallion spells (Ether 0x18, Bombos 0x19, Quake 0x1c) have no place
+  // of their own: their x/y hold a counter or what the ancilla before them
+  // left there, and they draw on the screen (bombos_x/y_coord, Ether's orbs
+  // around Link), so their pieces refer to the middle of the screen shown
+  // (HdWorld_ScreenRect); with the leftover place under the screen the
+  // Bombos flames went 256 pixels down, off the screen
+  int aslot[kAncilla_Slots];
+  int srx, sry, srw, srh;
+  HdWorld_ScreenRect(&srx, &sry, &srw, &srh);
+  for (int k = 0; k < kAncilla_Slots; k++)
+    if (aslot[k] = -1, ancilla_type[k] && n < 40) {
+      uint8 t = ancilla_type[k];
+      int ay = (int16)((ancilla_y_hi[k] << 8 | ancilla_y_lo[k]) - cy);
+      int ax = (int16)((ancilla_x_hi[k] << 8 | ancilla_x_lo[k]) - cx);
+      if (t == 0x18 || t == 0x19 || t == 0x1c)
+        ay = (int16)(sry - cy) + srh / 2, ax = (int16)(srx - cx) + srw / 2;
+      if (abs(ax - 128) > 512 || abs(ay - 112) > 512)
+        continue;
+      aslot[k] = n;
+      oy[n] = ay, ox[n++] = ax;
     }
   for (int i = 0; i < 128; i++) {
     int lo = ppu->oam[i * 2] & 0xff, yy = ppu->oam[i * 2] >> 8;
@@ -537,12 +556,15 @@ static void ResolveSpritePositions(Ppu *ppu) {
     // piu' in la' li porterebbe fuori dallo schermo. Allo stesso modo i pezzi
     // di un nemico si riferiscono solo a lui (la spada di un soldato fuori
     // dallo schermo non deve finire accanto a Link); per gli altri (oggetti in
-    // volo, effetti) l'oggetto piu' vicino
-    int k0 = 0, k1 = n, o = g_sprite_oam_owner[i];
+    // volo, effetti) l'oggetto piu' vicino. The pieces of an ancilla refer
+    // only to it (an enemy off the screen took a ball of the Ether)
+    int k0 = 0, k1 = n, o = g_sprite_oam_owner[i], a = g_ancilla_oam_owner[i];
     if (g_link_oam_mask[i])
       k0 = link_refs == 2 && !g_link_oam_ground[i], k1 = k0 + 1;
     else if (o < 16 && slot[o] >= 0)
       k0 = slot[o], k1 = k0 + 1;
+    else if (o == 0xff && g_ancilla_oam_frame[i] == (frame_counter | 0x100) && a < kAncilla_Slots && aslot[a] >= 0)
+      k0 = aslot[a], k1 = k0 + 1;
     int best = 1 << 30, y = yy;
     for (int c = -1; c <= 1; c++)
       for (int k = k0; k < k1; k++) {
@@ -634,6 +656,7 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
   HdFx_AsBgBeforeRender(g_zenv.ppu);
   HdFx_SuperBombBeforeRender(g_zenv.ppu);
   HdFx_FogBeforeRender(g_zenv.ppu);
+  HdFx_RainBeforeRender(g_zenv.ppu);
   HdWorld_BeforeRender(frame_w, height);
   // specchio: la PPU disegna senza onda e con i colori veri (vedi hd_world.c)
   HdWorld_WarpBeforeRender();
@@ -659,7 +682,9 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
         zelda_snes_dummy_write(NMITIMEN, 0x81);
       }
     }
+    HdFx_AreaEdgeLine(i, true);
     ppu_runLine(g_zenv.ppu, i);
+    HdFx_AreaEdgeLine(i, false);
     SimpleHdma_DoLine(&hdma_chans[0]);
     SimpleHdma_DoLine(&hdma_chans[1]);
     HdWorld_WarpLine(i + 1);
@@ -677,6 +702,7 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
   HdWater_AfterRender(g_zenv.ppu);
   HdFx_FogAfterRender(g_zenv.ppu);
   HdWorld_Composite(pixel_buffer, (int)pitch, frame_w, height);
+  HdFx_RainAfterComposite(g_zenv.ppu);
   HdWorld_WarpMask(pixel_buffer, (int)pitch, frame_w, height);
   HdFx_FadeMask(pixel_buffer, (int)pitch, frame_w, height);
   // how white the game made the scene (for shadows and the shader)
@@ -684,6 +710,8 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
 
   // Illuminazione dinamica (non sulla mappa del mondo in Mode 7)
   if (g_zenv.ppu->mode != 7) {
+    // the game's sprites and HUD, before the HD effects mark theirs sharp
+    HdFx_MosaicBeforeEffects(pixel_buffer, (int)pitch, frame_w, height);
     // tabella degli attributi finita (nei passaggi la RAM e' rifatta a pezzi):
     // una volta per fotogramma, per luci, acqua e buche
     HdWater_PrepareAttrs();

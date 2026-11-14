@@ -2366,6 +2366,29 @@ static void HurricaneSpin_AddSpark() {  // GBA 0x80c2790: riusa la scia 0x2b o n
     SpinAttackSparkleB_Init(k);
 }
 
+// Unique rule for a charge come to the top (sword, Hurricane Spin, and the
+// bow and hammer as in FSA): the same sound and rumble for all of them
+static void Link_ChargeReady(void) {
+  Ancilla_Sfx2_Near(55);
+  HdRumble(kRumble_SpinReady);
+}
+
+// Bow and hammer charged as in FSA (FsaItems), one count each: one a frame
+// up to 48 (FSA's main.dol, Link+0x3fc for both), then the flash on the bow's
+// tip or the hammer's head and a sparkle twinkling there every 4 frames
+enum { kItemFullCharge = 48 };
+
+static void Link_ItemCharge(uint8 *charge) {
+  if (*charge < kItemFullCharge) {
+    if (++*charge == kItemFullCharge) {
+      Link_ChargeReady();
+      AncillaAdd_ItemChargeFlash();
+    }
+  } else if ((frame_counter & 3) == 0) {
+    AncillaAdd_ItemChargeSparkle();
+  }
+}
+
 void HandleSwordControls() {  // 879d72
   if (joypad1H_last & kJoypadH_B) {
     Player_Sword_SpinAttackJerks_HoldDown();
@@ -2414,8 +2437,7 @@ void Player_Sword_SpinAttackJerks_HoldDown() {  // 879d9f
         if (hurricane && link_spin_attack_step_counter >= 96) {
           // carica lunga della Giravolta Tornado: secondo suono e scintille
           if (link_spin_attack_step_counter == 96) {
-            Ancilla_Sfx2_Near(55);
-            HdRumble(kRumble_SpinReady);
+            Link_ChargeReady();
             link_spin_attack_step_counter++;
           }
           if ((frame_counter & 7) == 0)
@@ -2426,8 +2448,7 @@ void Player_Sword_SpinAttackJerks_HoldDown() {  // 879d9f
           int c = old + (g_gold_potion_timer ? 2 : 1);
           link_spin_attack_step_counter = c > lim ? lim : c;
           if (old < 48 && link_spin_attack_step_counter >= 48) {
-            Ancilla_Sfx2_Near(55);
-            HdRumble(kRumble_SpinReady);
+            Link_ChargeReady();
             AncillaAdd_ChargedSpinAttackSparkle();
           }
         }
@@ -2575,6 +2596,102 @@ out:
   button_mask_b_y &= ~0x40;
 }
 
+// Hammer as in Four Swords Adventures (FsaItems): held up with the button
+// down, it charges. Values from the FSA code (main.dol, Link's hammer state
+// 802619a0): the charge counts one a frame up to 48, then a flash lights on
+// the head with the sound of the charged sword and bow (as in FSA, checked by
+// the user) and the blow that follows is a charged one: twice the damage (FSA 8 -> 16)
+// on what the hammer itself touches (sprite.c), a stronger shock in the
+// ground (HdFx_HammerWave) and, as the user asked (in FSA Force Gems come
+// out), outdoors a prize out of the ground hit, as often as with the shovel
+static uint8 g_hammer_charge;
+static bool g_hammer_blow_charged;
+
+static void Ground_RandomPrizeAt(int x, int y);
+
+// true while the swing of a charged blow is on
+bool Link_HammerBlowCharged(void) {
+  return g_hammer_blow_charged && (link_item_in_hand & 2);
+}
+
+// Where the hammer strikes: between the two hit stars (Ancilla_AddHitStars)
+static const int8 kHammerWaveX[4] = { 2, 13, -6, 22 }, kHammerWaveY[4] = { 7, 25, 20, 20 };
+
+static void LinkHammer_StrikePoint(int *x, int *y) {
+  int i = link_direction_facing >> 1;
+  *x = link_x_coord + kHammerWaveX[i], *y = link_y_coord + kHammerWaveY[i];
+}
+
+// true with the point struck while the hammer is down, the blow on
+bool Link_HammerDownAt(int *x, int *y) {
+  if (!(link_item_in_hand & 2) || !(button_mask_b_y & 0x40) || player_handler_timer == 0 ||
+      link_item_in_hand & 0x10)
+    return false;
+  LinkHammer_StrikePoint(x, y);
+  return true;
+}
+
+// The ripple of the charged blow (hd_fx.c DrawChargedBlow: its crest out from
+// the hit at 47 + 2.63 pixels a frame, the ripple 90 pixels deep behind it,
+// for 90 frames): every bomb it reaches goes off, Link's (ancilla 7 on its
+// fuse) and the enemies' (sprite 0x4a lit)
+enum { kHammerRingLife = 90, kHammerRingAhead = 8, kHammerRingBehind = 90 };
+static int g_hammer_ring_x, g_hammer_ring_y;
+static uint8 g_hammer_ring_t;  // frames since the blow + 1, 0 = no ring
+
+static bool HammerRing_Touches(int x, int y, void *ctx) {
+  int r = *(int *)ctx;
+  int dx = x - g_hammer_ring_x, dy = y - g_hammer_ring_y, d2 = dx * dx + dy * dy;
+  int hi = r + kHammerRingAhead, lo = r - kHammerRingBehind;
+  return d2 <= hi * hi && (lo < 0 || d2 > lo * lo);
+}
+
+// Once a game frame (Ancilla_Main)
+void Link_HammerRingTick(void) {
+  if (!g_config.fsa_items)  // only with Items as in FSA, also turned off mid-wave
+    g_hammer_ring_t = 0;
+  if (!g_hammer_ring_t || submodule_index)
+    return;
+  int r = 47 + (g_hammer_ring_t - 1) * 263 / 100;  // 2.63 pixels a frame
+  if (++g_hammer_ring_t > kHammerRingLife)
+    g_hammer_ring_t = 0;
+  Bombs_SetOff(HammerRing_Touches, &r, 1);  // they go off in the next frame
+}
+
+static bool LinkHammer_Charge(void) {
+  if (!g_config.fsa_items || !Link_ItemButtonHeld(g_item_btn))
+    return false;
+  Link_ItemCharge(&g_hammer_charge);
+  return true;
+}
+
+// Open ground at a pixel outdoors, for the prize of the charged hammer (Items
+// as in FSA): the plain ground of the overworld, the same 8x8 tiles in every
+// area and both worlds (measured on the drawn areas): tiles with behaviour
+// 0x48, the green ground of the Light World also with its flowers and tufts,
+// the yellow one of Death Mountain and their Dark World colours; the brown
+// earth with the edges of the paths (tiles 0x8c-0x8e, 0x9c-0x9d, 0xab, 0xba,
+// 0xbb in palette 2). Not tall grass, bushes, water, rocks, floors, stairs
+static bool LinkHammer_OpenGroundAt(int px, int py) {
+  if (player_is_indoors)
+    return false;
+  int m16 = HdWorld_WorldTile(px, py);  // continuous world: past the area
+  uint16 e = m16 >= 0 ? GetMap16toMap8Table()[m16 * 4 + ((py >> 3) & 1) * 2 + ((px >> 3) & 1)] :
+      Overworld_GetMap8AtLocation((uint16)px >> 3, (uint16)py);
+  if (GetMap8toTileAttr()[e & 0x1ff] == 0x48)
+    return true;
+  int tile = e & 0x3ff, pal = e >> 10 & 7;
+  return pal == 2 && (tile == 0x8c || tile == 0x8d || tile == 0x8e || tile == 0x9c ||
+      tile == 0x9d || tile == 0xab || tile == 0xba || tile == 0xbb);
+}
+
+// The charged blow outdoors: maybe a prize out of the open ground hit
+static void LinkHammer_RandomPrize(int x, int y) {
+  if (player_is_indoors || submodule_index || !LinkHammer_OpenGroundAt(x, y))
+    return;
+  Ground_RandomPrizeAt(x - 8, y - 12);
+}
+
 void LinkItem_Hammer() {  // 879f7b
   static const uint8 kHammerAnimDelays[] = { 3, 3, 16 };
   if (link_item_in_hand & 0x10)
@@ -2582,6 +2699,9 @@ void LinkItem_Hammer() {  // 879f7b
   if (!(button_mask_b_y & 0x40)) {
     if (is_standing_in_doorway || !(filtered_joypad_H & kJoypadH_Y))
       return;
+    g_item_btn = GetCurrentItemButtonIndex();
+    g_hammer_charge = 0;
+    g_hammer_blow_charged = false;
     button_mask_b_y |= 0x40;
     link_delay_timer_spin_attack = kHammerAnimDelays[0];
     link_cant_change_direction |= 1;
@@ -2594,24 +2714,36 @@ void LinkItem_Hammer() {  // 879f7b
   link_direction &= ~0xf;
   if (!sign8(--link_delay_timer_spin_attack))
     return;
+  // the hammer kept up while charging (FsaItems)
+  if (player_handler_timer == 0 && LinkHammer_Charge()) {
+    link_delay_timer_spin_attack = 0;
+    return;
+  }
   player_handler_timer++;
 
   link_delay_timer_spin_attack = kHammerAnimDelays[player_handler_timer];
   if (player_handler_timer == 1) {
+    g_hammer_blow_charged = g_config.fsa_items && g_hammer_charge >= kItemFullCharge;
+    g_hammer_charge = 0;
     TileDetect_MainHandler(3);
     Ancilla_AddHitStars(22, 0);
-    HdRumble(kRumble_Hammer);
+    HdRumble(g_hammer_blow_charged ? kRumble_DashCrash : kRumble_Hammer);
     if (g_config.fsa_items) {
       // shock wave from between the two hit stars (Ancilla_AddHitStars)
-      static const int8 kHammerWaveX[4] = { 2, 13, -6, 22 }, kHammerWaveY[4] = { 7, 25, 20, 20 };
-      int i = link_direction_facing >> 1;
-      HdFx_HammerWave(link_x_coord + kHammerWaveX[i], link_y_coord + kHammerWaveY[i]);
+      int hx, hy;
+      LinkHammer_StrikePoint(&hx, &hy);
+      HdFx_HammerWave(hx, hy, g_hammer_blow_charged);
+      if (g_hammer_blow_charged) {
+        LinkHammer_RandomPrize(hx, hy);
+        g_hammer_ring_x = hx, g_hammer_ring_y = hy, g_hammer_ring_t = 1;
+      }
     }
     if (sound_effect_1 == 0) {
       Ancilla_Sfx2_Near(16);
       SpawnHammerWaterSplash();
     }
   } else if (player_handler_timer == 3) {
+    g_hammer_blow_charged = false;
     player_handler_timer = 0;
     link_delay_timer_spin_attack = 0;
     button_mask_b_y &= ~0x40;
@@ -2626,22 +2758,13 @@ void LinkItem_Hammer() {  // 879f7b
 // up to 48; there two sparkle effects light up on the tip with a sound and the
 // arrow shot then is a charged one (its sparkles: Ancilla09_Arrow). In FSA the
 // charged arrow flies as fast as the plain one; here, as asked, twice as fast
-enum { kBowFullCharge = 48 };
 static uint8 g_bow_charge;
 
 static bool LinkBow_Charge(void) {
   if (!g_config.fsa_items || !Link_ItemButtonHeld(g_item_btn) || archery_game_out_of_arrows ||
       !link_num_arrows && !archery_game_arrows_left)
     return false;
-  if (g_bow_charge < kBowFullCharge) {
-    if (++g_bow_charge == kBowFullCharge) {
-      Ancilla_Sfx2_Near(55);
-      HdRumble(kRumble_SpinReady);
-      AncillaAdd_BowChargeFlash();
-    }
-  } else if ((frame_counter & 3) == 0) {
-    AncillaAdd_BowChargeSparkle();
-  }
+  Link_ItemCharge(&g_bow_charge);
   return true;
 }
 
@@ -2691,7 +2814,7 @@ void LinkItem_Bow() {  // 87a006
       ancilla_type[obj] = 0;
       Ancilla_Sfx2_Near(60);
     }
-    if (ancilla_type[obj] == 9 && g_bow_charge >= kBowFullCharge)
+    if (ancilla_type[obj] == 9 && g_bow_charge >= kItemFullCharge)
       Arrow_MakeCharged(obj);
     // FsaItems: the arrow seen on the bow leaves at once from the string,
     // without the 4 frames it waits unseen in the original (Ancilla09_Arrow)
@@ -2839,7 +2962,7 @@ void LinkItem_Lamp() {  // 87a24d
     if (!player_is_indoors) {
       Point16U pt;
       Overworld_GetLinkMap16Coords(&pt);
-      HdBurn_Ignite(pt.x, pt.y, true);
+      HdBurn_Ignite(pt.x, pt.y, true, HdBurn_NewFire());
     }
   }
   link_item_in_hand = 0;
@@ -2897,10 +3020,9 @@ void LinkItem_ShovelAndFlute() {  // 87a313
 
 // Spada e oggetti: oggetto che esce dalla terra scavata, come la GBA
 // (0x80a30b0): nasce sulla casella davanti a Link e salta verso dove guarda
-static void Shovel_GbaSpawnPrize(uint8 type) {
+// (x, y: corner of the prize sprite; also the charged hammer)
+static void Ground_SpawnPrizeAt(uint8 type, int x, int y) {
   static const int8 kVel[2] = { -22, 22 };                     // 0x816a896
-  static const int8 kDx[4] = { 8, 8, -2, 20 };                 // 0x81699a0
-  static const int8 kDy[4] = { -2, 22, 20, 20 };               // 0x8169948
   SpriteSpawnInfo info;
   int j = Sprite_SpawnDynamically(0, type, &info);
   if (j < 0)
@@ -2913,19 +3035,26 @@ static void Shovel_GbaSpawnPrize(uint8 type) {
   sprite_z_vel[j] = (type == 0xd8) ? 12 : 24;
   sprite_stunned[j] = 255;
   sprite_delay_aux4[j] = 48;
-  Sprite_SetX(j, (link_x_coord + kDx[d]) & ~0xf);
-  Sprite_SetY(j, (link_y_coord + kDy[d]) & ~0xf);
+  Sprite_SetX(j, x);
+  Sprite_SetY(j, y);
   sprite_floor[j] = 0;
   SpriteSfx_QueueSfx3WithPan(j, 0x30);
 }
 
 // GBA 0x80a34c8: scavando la terra fuori dal gioco della pala, 6 volte su 32
 // esce un oggetto (tabella 0x816a89c: cuore x3, magia piccola x2, rupia verde)
-static void Shovel_GbaRandomPrize(void) {
+static void Ground_RandomPrizeAt(int x, int y) {
   static const uint8 kItems[6] = { 0xd8, 0xd8, 0xd8, 0xdf, 0xdf, 0xd9 };
   int r = GetRandomNumber() & 0x1f;
   if (r <= 5)
-    Shovel_GbaSpawnPrize(kItems[r]);
+    Ground_SpawnPrizeAt(kItems[r], x, y);
+}
+
+static void Shovel_GbaRandomPrize(void) {
+  static const int8 kDx[4] = { 8, 8, -2, 20 };                 // 0x81699a0
+  static const int8 kDy[4] = { -2, 22, 20, 20 };               // 0x8169948
+  int d = link_direction_facing >> 1 & 3;
+  Ground_RandomPrizeAt((link_x_coord + kDx[d]) & ~0xf, (link_y_coord + kDy[d]) & ~0xf);
 }
 
 void LinkItem_Shovel() {  // 87a32c

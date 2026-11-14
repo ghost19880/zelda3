@@ -861,8 +861,8 @@ static int g_mt_seq[kMtLines][kMtSlots], g_mt_written;
 // una scelta riscrive solo il cursore e gli spazi davanti, le parole restano
 static uint8 g_mt_x[kMtLines][kMtSlots];
 static float g_mt_reveal;
-// caselle del riquadro originale nascoste mentre disegna la PPU; quelle
-// lasciate (icona dell'oggetto da scegliere) restano visibili anche nella fascia
+// caselle del riquadro originale nascoste mentre disegna la PPU; the icon of
+// the item to choose (g_mt_kept) is drawn again in the band by DrawKeptIcon
 static uint16 g_mt_saved[kMtBoxH][kMtBoxW];
 static uint32 g_mt_kept[kMtBoxH];
 static bool g_mt_hidden;
@@ -1052,10 +1052,11 @@ void HdText_BeforeRender(Ppu *ppu) {
     for (int c = 0; c < kMtBoxW; c++) {
       uint16 *v = &ppu->vram[(text_msgbox_topleft + r * 32 + c) & 0x7fff];
       g_mt_saved[r][c] = *v;
-      if (IsDialogBoxTile(*v & 0x3ff))
-        *v = (*v & ~0x3ff) | blank;
-      else if (r > 0 && r < kMtBoxH - 1 && c > 0 && c < kMtBoxW - 1)
+      // the icon of the item to choose is hidden too: HdText_Draw draws it
+      // again in the band, on its text line, without the black box
+      if (!IsDialogBoxTile(*v & 0x3ff) && r > 0 && r < kMtBoxH - 1 && c > 0 && c < kMtBoxW - 1)
         g_mt_kept[r] |= 1u << c;
+      *v = (*v & ~0x3ff) | blank;
     }
   }
   g_mt_hidden = true;
@@ -1169,6 +1170,37 @@ static void DrawModernLine(Canvas *cv, int x, int y, int line, int clip0, int cl
   }
 }
 
+// Icon of the item to choose (the tiles of the original box that are not
+// text, g_mt_kept), drawn as in the HUD: the black of its box becomes
+// transparent, without a dark outline. Same column as in the original box,
+// moved to the middle of the modern line that takes the place of the
+// original line it stands on (16 pixel lines from tile row 1)
+static void DrawKeptIcon(Canvas *cv, int bx, int by, int ty, int lp, int clip0, int clip1) {
+  int r0 = -1;
+  for (int r = 0; r < kMtBoxH && r0 < 0; r++)
+    if (g_mt_kept[r])
+      r0 = r;
+  if (r0 < 0)
+    return;
+  int line = IntMin(IntMax((r0 - 1) >> 1, 0), kMtLines - 1);
+  int dy = ty + line * lp + (kModernTextRows - 16) / 2 - (by + r0 * 8);
+  for (int r = r0; r < kMtBoxH; r++)
+    for (int c = 0; c < kMtBoxW; c++) {
+      if (!(g_mt_kept[r] >> c & 1))
+        continue;
+      uint32 img[64];
+      DecodeTile(g_mt_saved[r][c], img, 8);
+      for (int i = 0; i < 64; i++) {
+        uint32 col = img[i];
+        int yy = by + r * 8 + (i >> 3) + dy;
+        if (!col || yy < clip0 || yy >= clip1 ||
+            (col >> 16 & 0xff) + (col >> 8 & 0xff) + (col & 0xff) < 40)
+          continue;
+        BandPx(cv, bx + c * 8 + (i & 7), yy, col & 0xffffff, -1);
+      }
+    }
+}
+
 void HdText_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   // messaging_module 0: il dialogo e' appena cominciato e il messaggio non e'
   // ancora caricato (nel buffer c'e' ancora quello di prima)
@@ -1219,12 +1251,7 @@ void HdText_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
     for (int yy = 0; yy < h; yy++) {
       int a = in[yy + 1];
       for (int xx = a; xx < w - a; xx++) {
-        int sx = x + xx, sy = y + yy;
-        // icona dell'oggetto da scegliere: resta com'e'
-        int cc = (sx - bx) >> 3, cr = (sy - by) >> 3;
-        if (sx >= bx && sy >= by && cr < kMtBoxH && cc < kMtBoxW && (g_mt_kept[cr] >> cc & 1))
-          continue;
-        BandPx(&cv, sx, sy, 0x101a14, 170);
+        BandPx(&cv, x + xx, y + yy, 0x101a14, 170);
       }
     }
   }
@@ -1233,6 +1260,7 @@ void HdText_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   int clip0 = g_mt_border ? y + 2 : y, clip1 = g_mt_border ? y + h - 2 : y + h;
   for (int i = 0; i < kMtLines; i++)
     DrawModernLine(&cv, x + kMtPadX, ty + i * lp, i, clip0, clip1);
+  DrawKeptIcon(&cv, bx, by, ty, lp, y, y + h);
   // triangolo bianco in basso al centro, sul bordo: il messaggio aspetta un
   // tasto (compare quando il testo e' tutto visibile, e va su e giu')
   if (Text_WaitingForKey() && !HdText_Revealing()) {

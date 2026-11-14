@@ -566,6 +566,15 @@ static bool FreeMover(int k) {
 // - la sua "schermata" e' quella del gioco originale, dove un nemico restava
 //   attivo fino a 64 pixel oltre lo schermo (256x224) con Link al centro:
 //   128 + 64 = 192 pixel in orizzontale, 112 + 64 = 176 in verticale;
+//   with the wide screen the game keeps enemies active up to 64 pixels past
+//   the side bands and past the 240 rows, so the screen grows by the band
+//   and by the extra rows (SightX, SightY);
+// - one rule for every enemy and every aspect ratio: an enemy that shows on
+//   the screen sees Link (EnemySeesLink), also when Link is not in the middle
+//   of the view (world edges, smooth camera). Before, in 18:9 (bands of
+//   96 px) an enemy between 192 and 224 px from Link was on screen but did
+//   not see him: the red soldier 0x45, who only runs at Link, stood still at
+//   the edge of the view;
 // - se Link e' fuori dalla sua schermata non lo vede (durante il suo passo
 //   crede che Link sia lontanissimo) e non si allontana oltre la stessa
 //   distanza dal suo punto di partenza (fa da muro, o torna dov'era);
@@ -637,10 +646,19 @@ static void HomeOf(int k, int *hx, int *hy) {
   BlkCenter(sprite_N_word[k], hx, hy);
 }
 
+// Half size of an enemy's screen: kSightX/kSightY plus the wide screen band
+// and half of the extra rows (240 instead of 224)
+static int SightX(void) {
+  return kSightX + g_zenv.ppu->extraLeftRight;
+}
+static int SightY(void) {
+  return kSightY + ((g_zenv.ppu->renderFlags & kPpuRenderFlags_Height240) ? 8 : 0);
+}
+
 // Distanza "a rettangolo": vale kSightLimit sul bordo della schermata
-enum { kSightLimit = kSightX * kSightY };
+#define kSightLimit (SightX() * SightY())
 static int Dist2(int x0, int y0, int x1, int y1) {
-  int dx = abs(x1 - x0) * kSightY, dy = abs(y1 - y0) * kSightX;
+  int dx = abs(x1 - x0) * SightY(), dy = abs(y1 - y0) * SightX();
   return dx > dy ? dx : dy;
 }
 
@@ -735,6 +753,14 @@ static bool FliesUntilOffscreen(int k) {
          (sprite_type[k] >= 0x9e && sprite_type[k] <= 0xa0 && sprite_ai_state[k] != 0);
 }
 
+// Unica regola della vista (before the area check of HdWorld_SpriteBegin):
+// Link within the enemy's screen, or the enemy (16x16 at x, y) on the screen
+// shown, so that nothing seen on screen stands still for lack of Link
+static bool EnemySeesLink(int x, int y, int lx, int ly) {
+  return Dist2(x + 8, y + 8, lx, ly) <= kSightLimit ||
+         (g_view_valid && InView(x, y, 0));
+}
+
 void HdWorld_SpriteBegin(int k) {
   g_sight_k = -1;
   g_sight_lost = false;
@@ -750,7 +776,7 @@ void HdWorld_SpriteBegin(int k) {
   g_sight_px = SpriteWorldX(k), g_sight_py = SpriteWorldY(k);
   g_sight_hp = sprite_health[k], g_sight_state = sprite_state[k];
   int lx = link_x_coord + 8, ly = link_y_coord + 12;
-  g_sight_sees = Dist2(g_sight_px + 8, g_sight_py + 8, lx, ly) <= kSightLimit;
+  g_sight_sees = EnemySeesLink(g_sight_px, g_sight_py, lx, ly);
   if (g_sight_sees && HeadAt(lx, ly) != BYTE(overworld_screen_index) && !((spr_disturbed[k] & 2) && Chasing(k))) {
     int dx = abs(g_sight_px + 8 - lx), dy = abs(g_sight_py + 8 - ly);
     g_sight_sees = (dx > dy ? dx : dy) <= kBorderSight;
@@ -1061,7 +1087,10 @@ static void TrailClear(void);
 
 void HdWorld_ResetStates(void) {
   // anche i cespugli bruciati ricrescono: niente macchie all'uscita
-  HdBurn_Reset();
+  // (playing inside a house or cave the list holds the room's frozen water:
+  // hd_burn.c clears it itself when the room changes)
+  if (!(player_is_indoors && main_module_index == 7))
+    HdBurn_Reset();
   LiveDropAll();
   g_n_homing = 0;  // il mondo riparte: tutti i nemici tornano a casa
   TrailClear();
@@ -1672,6 +1701,21 @@ static int EaseLimit(int c, int v, int p, int m) {
   return abs(d) <= lim ? c : p + (d > 0 ? lim : -lim);
 }
 
+// The game moves its camera when Link (x+8, y+12) reaches scroll_hi going
+// right/down, or scroll_low (= hi + 2) going left/up, and then holds him at
+// hi - 1 (low + 1 = hi + 3): two points 4 px apart, by the way Link goes
+// (Overworld_OperateCameraScroll). One rule for setting the point and for the
+// view that follows it: before, the view kept Link at hi and when the game's
+// camera started moving Link jumped by 1 px
+static int g_scroll_dir_x = 1, g_scroll_dir_y = 1;  // last way of Link (+1, -1)
+static int ScrollHeldAt(int hi, int dir) {
+  return dir > 0 ? hi - 1 : hi + 3;
+}
+static void SetScrollPoint(uint16 *hi, uint16 *low, int at, int dir) {
+  *hi = (uint16)(dir > 0 ? at + 1 : at - 3);
+  *low = *hi + 2;
+}
+
 void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
   g_ease_x = g_ease_y = false;
   int gx = BG2HOFS_copy2, gy = BG2VOFS_copy2;
@@ -1707,6 +1751,7 @@ void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
              submodule_index == 0 || submodule_index == 9 || submodule_index == 10 || InMapReturn() ? 1 :
              mosaic || InWarpView() ? 3 : 0;
   bool mosaic_ended = g_prev_mosaic && mode == 1;
+  bool mosaic_started = !g_prev_mosaic && mode == 3 && mosaic;
   g_prev_mosaic = mode == 3 && mosaic;
   // Col mondo continuo il passaggio fra aree si fa tutto in un frame di gioco
   // (fasi 1-8 nello stesso frame, InstantWorldTransition): il cambio d'area
@@ -1728,6 +1773,8 @@ void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
   int z = (allow_scroll_z && link_z_coord != 0xffff) ? link_z_coord : 0;
   int lx = link_x_coord + 8, ly = (uint16)(link_y_coord - z + 12);
   int mx = g_vis_valid ? lx - g_last_lx : 0, my = g_vis_valid ? ly - g_last_ly : 0;
+  if (mx) g_scroll_dir_x = mx > 0 ? 1 : -1;
+  if (my) g_scroll_dir_y = my > 0 ? 1 : -1;
   // view shown last frame (for EaseLimit)
   bool had_view = g_vis_valid;
   int pvx = RoundVis(g_vis_x), pvy = RoundVis(g_vis_y);
@@ -1737,6 +1784,8 @@ void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
     // sposta la sua telecamera nell'area nuova
     if (!g_vis_valid)
       g_vis_x = (float)gx, g_vis_y = (float)gy;
+    else if (mosaic_started)
+      g_vis_x += mx, g_vis_y += my;  // Link's last step (the boots: 4 px) before the view stops
     // gia' entro i limiti della vista (bordo del mondo, montagna): uscendo
     // dal Dominio di Zora la telecamera del gioco e' oltre e, finita la
     // dissolvenza, la vista saltava di 37 pixel
@@ -1756,39 +1805,34 @@ void HdWorld_UpdateCamera(int *cam_x, int *cam_y) {
     // (the same at the end of the mosaic: the area changed under it)
     if ((area_changed || mosaic_ended) && g_vis_valid) {
       bool vert = overworld_screen_transition < 2;
-      int px = lx - RoundVis(g_vis_x), py = ly - RoundVis(g_vis_y);
+      // Link where he was in the view last frame (lx - mx): with this frame's
+      // step the view stood still for a frame and Link stayed off by the step
+      // (4 px running with the boots, 1-2 walking)
+      int px = lx - mx - RoundVis(g_vis_x), py = ly - my - RoundVis(g_vis_y);
       if (vert)
         px = -1;
       else
         py = -1;
-      if (px > 16 && px < 240) {
-        camera_x_coord_scroll_hi = gx + px;
-        camera_x_coord_scroll_low = camera_x_coord_scroll_hi + 2;
-      }
-      if (py > 16 && py < 208) {
-        camera_y_coord_scroll_hi = gy + py;
-        camera_y_coord_scroll_low = camera_y_coord_scroll_hi + 2;
-      }
+      if (px > 16 && px < 240)
+        SetScrollPoint(&camera_x_coord_scroll_hi, &camera_x_coord_scroll_low, gx + px, g_scroll_dir_x);
+      if (py > 16 && py < 208)
+        SetScrollPoint(&camera_y_coord_scroll_hi, &camera_y_coord_scroll_low, gy + py, g_scroll_dir_y);
     }
     // Back to play on the Pyramid (after 21 or 24, whose view is the game's
     // one): the game's scroll point is 3 pixels off Link and the view jumped
     // when the text closed. It moves where Link is, as after an area change
     if (!g_vis_valid && (prev_module == 21 || prev_module == 24)) {
       int px = lx - gx, py = ly - gy;
-      if (px > 16 && px < 240) {
-        camera_x_coord_scroll_hi = gx + px;
-        camera_x_coord_scroll_low = camera_x_coord_scroll_hi + 2;
-      }
-      if (py > 16 && py < 208) {
-        camera_y_coord_scroll_hi = gy + py;
-        camera_y_coord_scroll_low = camera_y_coord_scroll_hi + 2;
-      }
+      if (px > 16 && px < 240)
+        SetScrollPoint(&camera_x_coord_scroll_hi, &camera_x_coord_scroll_low, gx + px, g_scroll_dir_x);
+      if (py > 16 && py < 208)
+        SetScrollPoint(&camera_y_coord_scroll_hi, &camera_y_coord_scroll_low, gy + py, g_scroll_dir_y);
     }
     // Dove sarebbe la telecamera del gioco se non si fermasse ai bordi: tiene
     // Link al punto di scorrimento (camera_*_coord_scroll_hi), che resta fermo
     // quando la telecamera e' bloccata al bordo
-    int tx = lx - (int16)(camera_x_coord_scroll_hi - gx);
-    int ty = ly - (int16)(camera_y_coord_scroll_hi - gy);
+    int tx = lx - (int16)(ScrollHeldAt(camera_x_coord_scroll_hi, g_scroll_dir_x) - gx);
+    int ty = ly - (int16)(ScrollHeldAt(camera_y_coord_scroll_hi, g_scroll_dir_y) - gy);
     // Oltre il bordo solo dal lato in cui quella del gioco e' ferma
     if (gx != ow_scroll_vars0.xstart && tx < gx) tx = gx;
     if (gx != ow_scroll_vars0.xend && tx > gx) tx = gx;
@@ -2771,6 +2815,10 @@ enum { kThrownFrames = 64 };
 static uint8 g_thrown[16];
 
 static void GuestSendHome(int k);
+static void SendLeftGuestsHome(int ax, int ay, int as);
+static bool GuestInView(int k);
+static bool GuestBackHome(int k);
+static bool g_left[16];  // guest left behind in view (SendLeftGuestsHome)
 
 // Flyers that chase Link for ever: the Dark World raven (0x00 with sprite_A,
 // Sprite_Raven never stops attacking), the bees (0x79, Bee_Main) and the
@@ -2867,7 +2915,7 @@ static void TrackMain(void) {
       KeepInArea(k, g_chase_x[k], g_chase_y[k], sprite_type[k] == g_chase_type[k], ax, ay, as);
     int x = SpriteWorldX(k), y = SpriteWorldY(k);
     if (!sprite_state[k] || sprite_type[k] != g_chase_type[k])
-      g_chase[k] = 0, g_chase_type[k] = sprite_state[k] ? sprite_type[k] : 0xff, g_carried[k] = false, g_thrown[k] = 0;
+      g_chase[k] = 0, g_chase_type[k] = sprite_state[k] ? sprite_type[k] : 0xff, g_carried[k] = false, g_thrown[k] = 0, g_left[k] = false;
     else
       ChaseStep(&g_chase[k], g_chase_x[k], g_chase_y[k], x, y, link_x_coord, link_y_coord);
     g_chase_x[k] = x, g_chase_y[k] = y;
@@ -2879,9 +2927,34 @@ static void TrackMain(void) {
   SaveGfx(&g_area_gfx, g_zenv.ppu);
   g_area_gfx_valid = true;
   g_last_head = cur;
+  SendLeftGuestsHome(ax, ay, as);
   ReturnHomeWhenAway();
   ResetFarEnemies(link_x_coord, link_y_coord, g_ram);
   UpdateWorldMap();
+}
+
+static bool GuestInView(int k) {
+  int x = SpriteWorldX(k), y = SpriteWorldY(k);
+  return InView(x, y - sprite_z[k], 32) || InView(x, y, 32);
+}
+
+// Guests left in an area Link went out of while they were in view
+// (HdWorld_BeforeNewSprites): once out of view they go home as the others
+// did at the area change; back in Link's area they are guests as before
+static void SendLeftGuestsHome(int ax, int ay, int as) {
+  for (int k = 0; k < 16; k++) {
+    if (!g_left[k])
+      continue;
+    if (!IsMarkedCarried(k) || InSquare(SpriteWorldX(k) + 8, SpriteWorldY(k) + 8, ax, ay, as)) {
+      g_left[k] = false;
+      continue;
+    }
+    if (IsFollower(k, g_chase[k]) || g_thrown[k] || GuestInView(k))
+      continue;
+    g_left[k] = false;
+    if (!GuestBackHome(k))
+      GuestSendHome(k);
+  }
 }
 
 // Guest k leaves the game and goes back home (like an enemy that lost Link,
@@ -2958,9 +3031,20 @@ static void KeepAreaGfx(int k) {
     GuestAdd(k, &g_area_gfx);
 }
 
+// Area enemies that were chasing Link when he left their area and stay there
+// (too far to cross with him): their area's copy starts with the same chase
+// (LiveBuild), so they keep running at Link while they see him
+// (EnemySeesLink, Chasing) instead of stopping at once (the red soldier left
+// behind by a hookshot jump stood still as soon as it was off the screen)
+enum { kMaxHandoff = 16 };
+typedef struct Handoff { int area; uint16 blk; uint8 chase; } Handoff;
+static Handoff g_handoff[kMaxHandoff];
+static int g_n_handoff;
+
 void HdWorld_BeforeNewSprites(void) {
   if (!PersistOn() || g_last_head < 0 || g_last_head == BYTE(overworld_screen_index))
     return;
+  g_n_handoff = 0;
   int ax, ay, as;
   AreaRect(BYTE(overworld_screen_index), &ax, &ay, &as);
   for (int k = 0; k < 16; k++) {
@@ -2987,14 +3071,26 @@ void HdWorld_BeforeNewSprites(void) {
       // sparisce e torna a casa (come chi perde Link, HdWorld_CarriedLost);
       // se e' gia' nell'area nuova resta
       if (!area && IsMarkedCarried(k) && !in_new) {
-        if (!GuestBackHome(k))
-          GuestSendHome(k);
+        if (GuestBackHome(k))
+          continue;
+        // still in view (a stunned soldier...): it stays where it is and goes
+        // home once out of view (SendLeftGuestsHome), not before Link's eyes
+        if (GuestInView(k)) {
+          g_left[k] = true;
+          sprite_room[k] = BYTE(overworld_area_index);
+          continue;
+        }
+        GuestSendHome(k);
         continue;
       }
       // resta nella sua area (mondo persistente): li' lo muove la sua copia
-      if (area)
+      if (area) {
+        if (g_chase[k] && g_n_handoff < kMaxHandoff) {
+          Handoff *h = &g_handoff[g_n_handoff++];
+          h->area = g_last_head, h->blk = sprite_N_word[k], h->chase = g_chase[k];
+        }
         DropCompanionsOf(k, g_last_head), sprite_state[k] = 0;
-      else
+      } else
         sprite_room[k] = BYTE(overworld_area_index);
       continue;
     }
@@ -3043,6 +3139,8 @@ void HdWorld_AfterLoad(void) {
   memset(g_guests, 0, sizeof(g_guests));
   memset(g_carried, 0, sizeof(g_carried));
   memset(g_thrown, 0, sizeof(g_thrown));
+  memset(g_left, 0, sizeof(g_left));
+  g_n_handoff = 0;
   g_n_pending = 0;
   g_area_gfx_valid = false;
   g_last_head = BYTE(overworld_screen_index);
@@ -3311,8 +3409,11 @@ static inline bool SpriteBehindBg(uint32 c, int x, int y) {
 // Pastes the sprite pixels (layer 4 or 6) of rows y0..y1-1 of src, drawn by
 // a copy of the PPU, over the frame: behind the HUD, the real sprites and the
 // high-priority BG2 tiles
+// shadow (or NULL): pixels of pix that cast a soft shadow, marked in the
+// game's map (HdFx_ShadowSource) where they are pasted
 static void PasteSprites(uint8 *pixels, int pitch, int width, const uint32 *pix, int y0, int y1,
-                         const OverlayCtx *ov) {
+                         const OverlayCtx *ov, const uint8 *shadow) {
+  uint8 *shadow_out = shadow ? HdFx_ShadowSource() : NULL;
   for (int y = y0; y < y1; y++) {
     uint32 *row = (uint32 *)(pixels + y * pitch);
     const uint32 *src = pix + y * width;
@@ -3321,6 +3422,8 @@ static void PasteSprites(uint8 *pixels, int pitch, int width, const uint32 *pix,
       if ((l != 4 && l != 6) || dl == 2 || dl == 4 || dl == 6 || SpriteBehindBg(c, x, y))
         continue;
       row[x] = OverlayBlend(ov, Dim(c & 0x0fffffff), x, y);
+      if (shadow_out)
+        shadow_out[y * width + x] |= shadow[y * width + x];
     }
   }
 }
@@ -3330,7 +3433,7 @@ static void DrawGuests(uint8 *pixels, int pitch, int width, int height, const Ov
   if (!g_guest_drawn || g_guest_w != width || g_guest_h != height)
     return;
   // (g_guest_pix holds only sprite pixels, layer 4 or 6, or 0: RenderApart)
-  PasteSprites(pixels, pitch, width, g_guest_pix, g_guest_y0, g_guest_y1, ov);
+  PasteSprites(pixels, pitch, width, g_guest_pix, g_guest_y0, g_guest_y1, ov, NULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -3371,6 +3474,12 @@ typedef struct LiveArea {
   uint32 *pix;         // sprite disegnati dalla sua PPU
   int pix_w, pix_h;
   uint8 chase[16], chase_type[16];  // inseguimento di Link (vedi ChaseStep)
+  // soft shadows of its sprites, as in the real game (HdFx_ShadowMarks):
+  // entries that cast one and game shadows to hide, from its last step, and
+  // the pixels that cast one in pix (shadow_on: shadow is filled)
+  uint8 cast[128];
+  bool hide_shadow[128], marks_on, shadow_on;
+  uint8 *shadow;
 } LiveArea;
 
 // Posizione e stato di Link (quello vero) da dare alle copie
@@ -3489,9 +3598,8 @@ static bool SquareInView(int sx, int sy, int vx, int vy, int ext, int m) {
 
 // Un nemico che seguiva Link e lo ha perso di vista (il gioco lo toglie)
 // torna alla sua area: li' non conta piu' come sconfitto e ricompare al
-// punto di partenza, invece di sparire per sempre. Ma solo quando Link non
-// e' nell'area della sua casa (ReturnHomeWhenAway): altrimenti ricomparirebbe
-// davanti a Link, che lo ha appena lasciato in un'altra area
+// punto di partenza, invece di sparire per sempre: when its home is out of
+// view (ReturnHomeWhenAway, g_hold), not before Link's eyes
 void HdWorld_CarriedLost(int k) {
   if (!PersistOn() || g_hd_neighbor_tick || !IsMarkedCarried(k))
     return;
@@ -3507,16 +3615,15 @@ void HdWorld_CarriedLost(int k) {
     ReturnHome(a, blk);
 }
 
-// Ritorni a casa in attesa: si fanno quando Link e' in un'altra area
+// Ritorni a casa in attesa: si fanno al frame dopo, anche con Link nell'area
+// della loro casa: ricompaiono solo quando la casa non e' nella vista
+// (g_hold, HdWorld_HoldReload). Before, they waited for Link to leave that
+// area, and while he stayed there the soldiers that had followed him out
+// were missing from it
 static void ReturnHomeWhenAway(void) {
-  int cur = BYTE(overworld_screen_index) & 0x7f, j = 0;
-  for (int i = 0; i < g_n_homing; i++) {
-    if (g_homing[i].area != cur)
-      ReturnHome(g_homing[i].area, g_homing[i].blk);
-    else
-      g_homing[j++] = g_homing[i];
-  }
-  g_n_homing = j;
+  for (int i = 0; i < g_n_homing; i++)
+    ReturnHome(g_homing[i].area, g_homing[i].blk);
+  g_n_homing = 0;
 }
 
 static void ReturnHome(int a, uint16 blk) {
@@ -3645,6 +3752,18 @@ static bool LiveBuild(LiveArea *la, int head, int vx, int vy) {
   la->fresh = la->drawn = la->near = false;
   memset(la->chase, 0, sizeof(la->chase));
   memset(la->chase_type, 0xff, sizeof(la->chase_type));
+  la->marks_on = la->shadow_on = false;
+  // enemies that were chasing Link as he left this area go on chasing here
+  for (int k = 0; k < 16; k++) {
+    if (!sprite_state[k])
+      continue;
+    for (int i = 0; i < g_n_handoff; i++)
+      if (g_handoff[i].area == head && g_handoff[i].blk == sprite_N_word[k]) {
+        la->chase[k] = g_handoff[i].chase, la->chase_type[k] = sprite_type[k];
+        g_handoff[i] = g_handoff[--g_n_handoff];
+        break;
+      }
+  }
   memcpy(la->ram, g_ram, sizeof(g_saved_ram));
   memcpy(la->ppu, g_zenv.ppu, sizeof(Ppu));
   return true;
@@ -3730,6 +3849,11 @@ static void LiveTick(LiveArea *la, int vx, int vy, const LiveLink *m) {
     was[k] = sprite_state[k], px[k] = SpriteWorldX(k), py[k] = SpriteWorldY(k);
   for (int i = 0; i < 128; i++)
     oam_buf[i].y = 0xf0;
+  // the copy's enemies mark their own OAM entries (for its soft shadows);
+  // the real game's marks are kept for its drawing
+  uint8 game_owner[128];
+  memcpy(game_owner, g_sprite_oam_owner, sizeof(game_owner));
+  memset(g_sprite_oam_owner, 0xff, sizeof(game_owner));
   g_hd_neighbor_tick = true;
   g_live_chase = la->chase;
   Sprite_Main();
@@ -3796,6 +3920,10 @@ static void LiveTick(LiveArea *la, int vx, int vy, const LiveLink *m) {
     }
   }
   NMI_DoUpdates();  // sprite, colori e grafica nella PPU della copia
+  Ppu *cp = g_zenv.ppu;
+  la->marks_on = HdFx_ShadowMarks(cp, cp->renderFlags & kPpuRenderFlags_Height240 ? 240 : 224,
+                                  g_sprite_oam_owner, NULL, la->cast, la->hide_shadow);
+  memcpy(g_sprite_oam_owner, game_owner, sizeof(game_owner));
   SnapshotEnemies();
   memcpy(la->ram, g_ram, sizeof(g_saved_ram));
   memcpy(la->ppu, g_zenv.ppu, sizeof(Ppu));
@@ -3942,7 +4070,8 @@ static void GuestsFromCopies(void) {
 static void LiveRender(LiveArea *la, int width, int height) {
   Ppu *p = la->ppu, *mp = g_zenv.ppu;
   if (!la->pix || la->pix_w != width || la->pix_h != height) {
-    free(la->pix);
+    free(la->pix), free(la->shadow);
+    la->shadow = NULL;
     la->pix = malloc((size_t)width * height * 4);
     la->pix_w = width, la->pix_h = height;
     if (!la->pix) {
@@ -3962,9 +4091,30 @@ static void LiveRender(LiveArea *la, int width, int height) {
   memset(p->objCastShadow, 0, sizeof(p->objCastShadow));
   ClearObjEffects(p);
   memset(p->objScale, 0, sizeof(p->objScale));
+  // soft shadows as in the real game: the enemies on the ground cast theirs
+  // (into la->shadow, added to the game's map in DrawLive) and their game
+  // shadow goes; before, an enemy lost its shadow crossing into the copy
+  la->shadow_on = false;
+  uint8 hid_idx[128];
+  uint16 hid_oam[128];
+  int n_hid = 0;
+  if (la->marks_on && HdFx_ShadowSource()) {
+    size_t n = (size_t)width * height;
+    if (!la->shadow)
+      la->shadow = malloc(n);
+    if (la->shadow) {
+      memset(la->shadow, 0, n);
+      memcpy(p->objCastShadow, la->cast, sizeof(p->objCastShadow));
+      p->objShadowOut = la->shadow, p->objShadowStride = width;
+      n_hid = HdFx_HideShadows(p, la->hide_shadow, hid_idx, hid_oam);
+      la->shadow_on = true;
+    }
+  }
   PpuObjRows(p, height, &la->pix_y0, &la->pix_y1);
   for (int i = la->pix_y0 + 1; i <= la->pix_y1; i++)
     ppu_runLine(p, i);
+  HdFx_ShowHiddenShadows(p, hid_idx, hid_oam, n_hid);
+  p->objShadowOut = NULL;
   la->fresh = false;
   la->drawn = true;
 }
@@ -3981,7 +4131,8 @@ static void DrawLive(uint8 *pixels, int pitch, int width, int height, const Over
     if (la->fresh || la->pix_w != width || la->pix_h != height)
       LiveRender(la, width, height);
     if (la->drawn)
-      PasteSprites(pixels, pitch, width, la->pix, la->pix_y0, la->pix_y1, ov);
+      PasteSprites(pixels, pitch, width, la->pix, la->pix_y0, la->pix_y1, ov,
+                   la->shadow_on && la->pix_w == width && la->pix_h == height ? la->shadow : NULL);
   }
 }
 

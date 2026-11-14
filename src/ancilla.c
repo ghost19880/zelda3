@@ -715,6 +715,7 @@ void Ancilla_Sfx3_Pan(int k, uint8 v) {  // 88802e
 enum { kRodPuffLimit = 9, kRodPuffPhase = 6, kRodPuffBurn = 4 * kRodPuffPhase };
 static const uint8 kRodPuffFlight[4] = {6, 6, 7, 8};
 static uint8 g_rod_puff[kAncilla_Slots];
+static uint16 g_rod_fire[kAncilla_Slots];  // each Fire Rod shot is a fire of its own (HdBurn_NewFire)
 
 void AncillaAdd_FireRodShot(uint8 type, uint8 y) {  // 8880b3
   static const int8 kFireRod_X[4] = {0, 0, -8, 16};
@@ -741,6 +742,7 @@ void AncillaAdd_FireRodShot(uint8 type, uint8 y) {  // 8880b3
   ancilla_objprio[j] = 0;
   ancilla_U[j] = 0;
   g_rod_puff[j] = 0;
+  g_rod_fire[j] = HdBurn_NewFire();
   int i = link_direction_facing >> 1;
   ancilla_dir[j] = i;
 
@@ -903,6 +905,8 @@ void Ancilla_Main() {  // 888242
   if (g_hd_neighbor_tick)
     return;
   HdBurn_Update();
+  HdBurn_Bombs();
+  Link_HammerRingTick();
   Ancilla_WeaponTink();
   Ancilla_ExecuteAll();
 }
@@ -944,11 +948,30 @@ void Bomb_CheckSpriteDamage(int k) {  // 888287
   }
 }
 
+// Ancilla (slot) that wrote each OAM entry, valid only in the frame stamped
+// in g_ancilla_oam_frame (frame_counter | 0x100): with the view moved the
+// position of each piece comes from its own ancilla (zelda_rtl.c), not from
+// the nearest object (an enemy off the screen took a ball of the Ether)
+uint8 g_ancilla_oam_owner[128];
+uint16 g_ancilla_oam_frame[128];
+
 void Ancilla_ExecuteAll() {  // 88832b
   for (int i = kAncilla_Slots - 1; i >= 0; i--) {
     cur_object_index = i;
-    if (ancilla_type[i])
+    if (ancilla_type[i]) {
+      uint16 saved[128];
+      for (int j = 0; j < 128; j++)
+        saved[j] = WORD(oam_buf[j].charnum), WORD(oam_buf[j].charnum) = 0xffff;
       Ancilla_ExecuteOne(ancilla_type[i], i);
+      for (int j = 0; j < 128; j++) {
+        if (WORD(oam_buf[j].charnum) == 0xffff) {
+          WORD(oam_buf[j].charnum) = saved[j];
+        } else {
+          g_ancilla_oam_owner[j] = (uint8)i;
+          g_ancilla_oam_frame[j] = frame_counter | 0x100;
+        }
+      }
+    }
   }
 }
 
@@ -1162,7 +1185,7 @@ static void FireRodShot_BurnAhead(int k) {
   int d = ancilla_dir[k] & 3;
   uint16 x = Ancilla_GetX(k), y = Ancilla_GetY(k);
   for (int i = 0; i < 2; i++)
-    HdBurn_Ignite(x + kRodProbe_X[i][d], y + kRodProbe_Y[i][d], true);
+    HdBurn_Ignite(x + kRodProbe_X[i][d], y + kRodProbe_Y[i][d], true, g_rod_fire[k]);
   // l'acqua ghiacciata si scioglie dove si congela: al centro e ai lati
   RodShot_WaterRow(x + 8, y + 8, d, HdBurn_MeltWater);
 }
@@ -2060,6 +2083,27 @@ void Ancilla_ApplyConveyor(int k) {  // 8897be
   Ancilla_MoveX(k);
 }
 
+// Every bomb still waiting to go off, Link's on its fuse (ancilla 7) and the
+// enemies' lit (sprite 0x4a), that touch(x, y, ctx) takes, with the middle of
+// the bomb in the world, goes off within delay frames (at least 1): the ring
+// of the charged hammer blow (FsaItems), a bomb going off and the fire in the
+// grass ("Burn and freeze interaction", hd_burn.c)
+void Bombs_SetOff(bool (*touch)(int x, int y, void *ctx), void *ctx, int delay) {
+  if (delay < 1)
+    delay = 1;
+  for (int k = 0; k < kAncilla_Slots; k++) {
+    if (ancilla_type[k] == 7 && ancilla_item_to_link[k] == 0 && ancilla_arr3[k] > delay &&
+        touch(Ancilla_GetX(k), Ancilla_GetY(k), ctx))  // its middle (Bomb_Draw: -8,-8)
+      ancilla_arr3[k] = delay;  // Ancilla07_Bomb: goes off when it gets to 0
+  }
+  for (int k = 0; k < 16; k++) {
+    // SpriteBomb_ExplosionIncoming: goes off at 1, counted down before it runs
+    if (sprite_state[k] >= 9 && sprite_type[k] == 0x4a && sprite_C[k] == 1 && sprite_delay_aux1[k] > delay + 1 &&
+        touch(Sprite_GetX(k) + 8, Sprite_GetY(k) + 8, ctx))
+      sprite_delay_aux1[k] = delay + 1;
+  }
+}
+
 void Bomb_CheckSpriteAndPlayerDamage(int k) {  // 889815
   static const uint8 kBomb_Dmg_Speed[16] = {32, 32, 32, 32, 32, 32, 28, 28, 28, 28, 28, 28, 24, 24, 24, 24};
   static const uint8 kBomb_Dmg_Zvel[16] = {16, 16, 16, 16, 16, 16, 12, 12, 12, 12, 8, 8, 8, 8, 8, 8};
@@ -2400,30 +2444,46 @@ void Arrow_MakeCharged(int k) {
 }
 
 static void AncillaAdd_ChargedArrowSparkle(int kin) {
-  static const int8 kChargedSparkle_X[4] = {-4, -4, 0, 2};
-  static const int8 kChargedSparkle_Y[4] = {0, 2, -4, -4};
+  // the corner of the sparkle's 8x8 piece with its middle on the arrow's tip
+  // (Arrow_Draw, flying arrow: up and down 8x16 with the head at the top or
+  // bottom, left and right 16x8 with the head at the left or right end)
+  static const int8 kChargedSparkle_X[4] = {0, 0, -4, 11};
+  static const int8 kChargedSparkle_Y[4] = {-4, 11, 0, 0};
   static const uint8 kRainbow[4] = {3, 2, 4, 1};  // pink, green, blue, yellow
   static uint8 colour;
   // one a frame in the slots Link's items do not use, else one every other
-  // frame as the silver arrow
+  // frame as the silver arrow; always in a slot after the arrow's, so that it
+  // runs first and takes the OAM in front of the arrow
   int k = -1;
-  for (int i = kAncilla_Slots - 1; i >= kAncilla_LinkSlots && k < 0; i--)
+  for (int i = kAncilla_Slots - 1; i >= kAncilla_LinkSlots && i > kin && k < 0; i--)
     if (ancilla_type[i] == 0)
       k = i;
-  if (k < 0 && !(frame_counter & 1))
+  if (k < 0 && !(frame_counter & 1)) {
     k = Ancilla_AllocHigh();
+    if (k >= 0 && k <= kin)
+      k = -1;
+  }
   if (k < 0)
     return;
   ancilla_type[k] = 0x3c;
   ancilla_item_to_link[k] = 0;
   ancilla_timer[k] = 4;
   ancilla_step[k] = kRainbow[colour++ & 3];
-  ancilla_floor[k] = link_is_on_lower_level;
+  ancilla_floor[k] = ancilla_floor[kin];
+  // a little scatter: up to 2 pixels across the arrow, up to 3 back along it
   int m = GetRandomNumber();
   int j = ancilla_dir[kin] & 3;
+  int across = (m & 3) - 2 + (m >> 2 & 1), back = m >> 4 & 3;
+  int dx = j < 2 ? across : (j == 2 ? back : -back);
+  int dy = j < 2 ? (j == 0 ? back : -back) : across;
+  // it is first drawn in the next frame, before the arrow (a higher slot),
+  // and by then the arrow has taken three more steps (one more now and two
+  // then: Ancilla09_Arrow): ahead of it by those, so it starts on the tip
+  dx += (int8)ancilla_x_vel[kin] * 3 >> 4;
+  dy += (int8)ancilla_y_vel[kin] * 3 >> 4;
   Ancilla_SetXY(k,
-    Ancilla_GetX(kin) + kChargedSparkle_X[j] + (m >> 4 & 7),
-    Ancilla_GetY(kin) + kChargedSparkle_Y[j] + (m & 7));
+    Ancilla_GetX(kin) + kChargedSparkle_X[j] + dx,
+    Ancilla_GetY(kin) + kChargedSparkle_Y[j] + dy);
 }
 
 void Ancilla09_Arrow(int k) {  // 88a131
@@ -3915,12 +3975,29 @@ void Ancilla3B_SwordUpSparkle(int k) {  // 88c167
 
 // Tip of the arrow nocked on the drawn bow (FsaItems, AncillaAdd_NockedArrow),
 // from Link's position: where its charge flash and sparkles shine
-// (Ancilla0D_SpinAttackFullChargeSpark, AncillaAdd_BowChargeSparkle). The
+// (Ancilla0D_SpinAttackFullChargeSpark, AncillaAdd_ItemChargeSparkle). The
 // corner of their 8x8 piece, so that its middle falls on the tip pixel,
 // measured on the frames: up 7,5 (behind his head), down 7,25, left -8,15,
 // right 23,15. Facing up they are drawn behind Link as the arrow
 static const int8 kBowTip_X[4] = {3, 3, -12, 19};
 static const int8 kBowTip_Y[4] = {1, 21, 11, 11};
+
+// Head of the hammer held up charging (FsaItems, LinkItem_Hammer), the same
+// way: corner of the 8x8 piece from Link's position. The hammer up is drawn
+// at kDrawSword_x/y (player_oam.c, r2 122/125/128/131: -2,-8 / 10,-3 / 1,-2 /
+// 7,-2) with its head on top. Measured on the frames: the flash's middle on
+// the white tip of the head (the white pixels at its top)
+static const int8 kHammerHead_X[4] = {-2, 10, 1, 7};
+static const int8 kHammerHead_Y[4] = {-7, -5, -5, -5};
+
+// Where a charge flash and its sparkles shine (FsaItems): on the tip of the
+// drawn bow or on the head of the hammer held up
+static void ChargeTip(int *x, int *y) {
+  int j = link_direction_facing >> 1;
+  bool hammer = (link_item_in_hand & 2) != 0;
+  *x = link_x_coord + (hammer ? kHammerHead_X[j] : kBowTip_X[j]);
+  *y = link_y_coord + (hammer ? kHammerHead_Y[j] : kBowTip_Y[j]);
+}
 
 // The bow drawn facing up (FsaItems): its flash and sparkles behind Link
 static bool BowTip_BehindLink(void) {
@@ -5314,10 +5391,12 @@ void Ancilla0D_SpinAttackFullChargeSpark(int k) {  // 88ddca
 
   uint16 x = link_x_coord + kSwordFullChargeSpark_X[j] - BG2HOFS_copy2;
   uint16 y = link_y_coord + kSwordFullChargeSpark_Y[j] - BG2VOFS_copy2;
-  // the bow charged (FsaItems): on its tip
-  if (link_item_in_hand & 0x10) {
-    x = link_x_coord + kBowTip_X[j] - BG2HOFS_copy2;
-    y = link_y_coord + kBowTip_Y[j] - BG2VOFS_copy2;
+  // the bow or the hammer charged (FsaItems): on its tip or head
+  if (link_item_in_hand & 0x12) {
+    int tx, ty;
+    ChargeTip(&tx, &ty);
+    x = tx - BG2HOFS_copy2;
+    y = ty - BG2VOFS_copy2;
   }
 
   oam_priority_value = kSwordFullChargeSpark_Flags[ancilla_floor[k]] << 8;
@@ -6771,9 +6850,9 @@ void AncillaAdd_ChargedSpinAttackSparkle() {  // 898cb1
   }
 }
 
-// The bow fully charged (FsaItems): the flash of the sword's full charge, a bit
-// longer, on the tip of the bow (Ancilla0D_SpinAttackFullChargeSpark)
-void AncillaAdd_BowChargeFlash(void) {
+// The bow or the hammer fully charged (FsaItems): the flash of the sword's full charge, a bit
+// longer, on the bow's tip or the hammer's head (ChargeTip, Ancilla0D_SpinAttackFullChargeSpark)
+void AncillaAdd_ItemChargeFlash(void) {
   for (int k = kAncilla_Slots - 1; k >= 0; k--) {
     // a sparkle, not the nocked arrow (ancilla_step 8)
     if (ancilla_type[k] == 0 || ancilla_type[k] == 0x3c && ancilla_step[k] != 8) {
@@ -6835,9 +6914,9 @@ void Arrow_StartOnBow(int k) {
   Ancilla_SetXY(k, link_x_coord + kNockBow_X[j], link_y_coord + 8 + kShootBow_Y[j]);
 }
 
-// The bow kept charged (FsaItems): a sparkle twinkling on its tip, as on the
+// The bow or the hammer kept charged (FsaItems): a sparkle twinkling on its tip, as on the
 // sword being charged (AncillaSpawn_SwordChargeSparkle)
-void AncillaAdd_BowChargeSparkle(void) {
+void AncillaAdd_ItemChargeSparkle(void) {
   int k = Ancilla_AllocHigh();
   if (k < 0)
     return;
@@ -6846,9 +6925,10 @@ void AncillaAdd_BowChargeSparkle(void) {
   ancilla_timer[k] = 4;
   ancilla_step[k] = 0;
   ancilla_floor[k] = link_is_on_lower_level;
-  int j = link_direction_facing >> 1;
+  int tx, ty;
+  ChargeTip(&tx, &ty);
   uint8 r = GetRandomNumber();
-  Ancilla_SetXY(k, link_x_coord + kBowTip_X[j] + (r & 3) - 1, link_y_coord + kBowTip_Y[j] + (r >> 4 & 3) - 1);
+  Ancilla_SetXY(k, tx + (r & 3) - 1, ty + (r >> 4 & 3) - 1);
 }
 
 void AncillaAdd_ExplodingWeatherVane(uint8 a, uint8 y) {  // 898d11

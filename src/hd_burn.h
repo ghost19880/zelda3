@@ -8,7 +8,10 @@
 // Da' fuoco al cespuglio o all'erba nel punto (x, y) del mondo esterno, se
 // c'e'; con spread il fuoco passa piano piano a quelli vicini (Bacchetta del
 // Fuoco e Lanterna), senza brucia solo quella tile. true se ha preso fuoco.
-bool HdBurn_Ignite(uint16 x, uint16 y, bool spread);
+// fire: the fire the flame belongs to (HdBurn_NewFire, one for each use of an
+// item): a tile it melts stays wet for that fire only
+uint16 HdBurn_NewFire(void);
+bool HdBurn_Ignite(uint16 x, uint16 y, bool spread, uint16 fire);
 // Congela il cespuglio o l'erba nel punto (x, y), se c'e' (Bacchetta del
 // Ghiaccio). true se si e' congelato.
 bool HdBurn_Freeze(uint16 x, uint16 y);
@@ -17,10 +20,13 @@ bool HdBurn_Freeze(uint16 x, uint16 y);
 void HdBurn_FreezeWater(uint16 x, uint16 y);
 void HdBurn_MeltWater(uint16 x, uint16 y);
 // Brucia (Medaglione della Fiamma) o congela (Medaglione dell'Etere) insieme
-// tutti i cespugli, l'erba e l'acqua che si vedono sullo schermo, senza
-// propagarsi
+// tutti i cespugli, l'erba e l'acqua che si vedono sullo schermo; il fuoco poi
+// si propaga oltre come ogni altro, il ghiaccio no
 void HdBurn_IgniteScreen(void);
 void HdBurn_FreezeScreen(void);
+// Bombs going off set off the bombs near them and set the grass on fire, the
+// fire sets off the bombs on it: once a game frame (Ancilla_Main)
+void HdBurn_Bombs(void);
 // Il cespuglio o l'erba appena tagliati o sollevati, con i resti nel punto
 // (x, y), erano congelati? (allora vanno in pezzi come un vaso, in blu)
 bool HdBurn_TakeFrozen(uint16 x, uint16 y);
@@ -77,5 +83,13 @@ int HdBurn_GetScorched(const HdBurnTile **tiles);
 int HdBurn_GetFrozen(const HdBurnTile **tiles);
 // Col mondo unico tutte le tile dello stesso mondo, altrimenti quelle dell'area
 bool HdBurn_TileShown(const HdBurnTile *t);
+// A scorched tile is drawn only while its bush is not there: the game makes
+// the bushes grow again on loading the area, also during an area change,
+// when HdBurn_Update (which forgets the tile) does not run yet
+bool HdBurn_ScorchShown(const HdBurnTile *t);
+// Indoors frozen water is ice (0x0f) in the room's attribute table: attribute
+// a of cell i (index of dung_bg2_attr_table) as it was before (water), for
+// the HD water under the ice
+uint8 HdBurn_UnfrozenAttr(int i, uint8 a);
 
 #endif  // ZELDA3_HD_BURN_H_

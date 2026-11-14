@@ -49,6 +49,9 @@ const uint8 *HdWater_AttrTable(void);
 // HdWater_IsFlood; c (0xRRGGBB): solo i pixel blu dell'interno sono acqua
 bool HdWater_IsTubCell(int pos);
 bool HdWater_IsTubColor(uint32 c);
+// Village troughs: tile 0x126/0x127 with palette 7 over the same tile + 0x10
+// (map8 entries); for the game they are wall, the HD water fills them
+bool HdWater_IsTroughPair(int top, int bottom);
 // Sul Monte della Morte (chiaro e oscuro) il vuoto oltre i dirupi e' "acqua
 // profonda" per il gioco, ma sullo schermo e' il cielo con le nuvole (marcate
 // anche loro come layer 7): li' l'acqua HD non si disegna e non si congela.
@@ -57,5 +60,6 @@ bool HdWater_IsSky(int wx, int wy);
 // Outdoor 8x8 tile entry (number, palette, flips) at world point wx, wy, also
 // in the neighbouring areas with the continuous world; -1 if unknown
 int HdWater_OwEntry(int wx, int wy);
+bool HdWater_IsFallCellAt(int wx, int wy);
 
 #endif  // ZELDA3_HD_WATER_H_

@@ -1105,7 +1105,7 @@ continue_after_set:
           LinkOam_DrawDungeonFallShadow(r4loc, xcoord);
           r4loc = 2; // wtf
         }
-      } else if (!g_config.fx_sprite_shadows || g_link_dive_timer) {  // con le ombre morbide (hd_fx.c) l'ovale serve solo sott'acqua
+      } else if (!g_config.fx_sprite_shadows || g_link_dive_timer || link_cape_mode) {  // con le ombre morbide (hd_fx.c) l'ovale serve solo sott'acqua; with the cape Link is invisible, only the oval shows where he is
         // draw shadow
         int shadow_idx = (link_auxiliary_state != 0) && (link_auxiliary_state != 1 || !link_cape_mode);
         uint16 oam_y = link_y_coord - BG2VOFS_copy2 + kOffsToShadowGivenDir_Y[link_direction_facing_mirror >> 1];

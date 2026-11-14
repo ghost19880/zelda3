@@ -821,6 +821,7 @@ static void BuildItemsRaw(void) {
     AddFeature(kFeatures0_BirdTravel9);
     AddHeader("Interazione con l'ambiente");
     AddFeature(kFeatures0_SwordAndItems);
+    AddItem(109, "Oggetti come FSA", YesNo(g_config.fsa_items));
     AddFeature(kFeatures0_BurnAndFreeze);
     AddItem(103, "Frecce piantate nei muri", YesNo(g_config.stuck_arrows));
     AddItem(107, "Rocce incantate", YesNo(g_config.enchanted_rocks));
@@ -829,7 +830,6 @@ static void BuildItemsRaw(void) {
     AddFeature(kFeatures0_GoldPotion);
     AddItem(108, "Danni dei nemici come su GBA", YesNo(g_config.gba_damage));
     AddItem(104, "Giravolta Tornado", YesNo(g_config.hurricane_spin));
-    AddItem(109, "Oggetti come FSA", YesNo(g_config.fsa_items));
     AddFeature(kFeatures0_MoreActiveBombs);
     AddFeature(kFeatures0_CarryMoreRupees);
     AddHeader("Correzioni");
@@ -840,10 +840,10 @@ static void BuildItemsRaw(void) {
   case kPage_Audio:
     snprintf(buf, sizeof(buf), "%d%%", Host_GetVolume());
     AddItem(0, "Volume", buf);
+    // come nel launcher (Audio): the Output card comes before the MSU card
+    AddFeatureAt(kFeatures0_DisableLowHealthBeep, kGameInAudio);
     snprintf(buf, sizeof(buf), "%s %s", Tr(YesNo(g_msu_on)), Tr("(al riavvio)"));
     AddItem(1, "Musica orchestrale MSU", buf);
-    // come nel launcher (Audio)
-    AddFeatureAt(kFeatures0_DisableLowHealthBeep, kGameInAudio);
     break;
   case kPage_Controls:
     for (int i = 0; i < 12; i++) {

@@ -4,6 +4,7 @@
 #include "variables.h"
 #include "overworld.h"
 #include "hd_burn.h"
+#include "hd_water.h"
 #include "hd_world.h"
 
 // Casella (map16) nel punto x (a passi di 8 pixel), y: fuori dall'area
@@ -17,7 +18,8 @@ static uint16 Map16At(uint16 x, uint16 y, uint16 t) {
 // Outdoor tile attribute rv at x (in steps of 8 pixels), y: frozen water
 // (hd_burn.c) becomes ice (0x0f)
 uint8 TileDetect_FrozenWaterAttr(uint8 rv, uint16 x, uint16 y) {
-  return (rv == 0x08 || rv == 0x09) && HdBurn_IsFrozenAt(x << 3, y) ? 0x0f : rv;
+  // (never the waterfalls: the hidden entrance stays closed)
+  return (rv == 0x08 || rv == 0x09) && HdBurn_IsFrozenAt(x << 3, y) && !HdWater_IsFallCellAt(x << 3, y) ? 0x0f : rv;
 }
 
 static const uint8 kDetectTiles_tab0[] = { 8, 24, 0, 15 };

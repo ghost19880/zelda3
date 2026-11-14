@@ -4,8 +4,10 @@
 // alti. Ogni tile resta in fiamme per circa un secondo e intanto il fuoco
 // passa, con un po' di ritardo casuale, a quelle vicine (anche in diagonale),
 // cosi' un prato brucia in qualche secondo come in Four Swords Adventures. Il
-// Medaglione della Fiamma brucia insieme tutto quello che si vede, senza
-// propagarsi. Quando si spegne il cespuglio si comporta come quello tagliato:
+// Medaglione della Fiamma brucia insieme tutto quello che si vede e da li' il
+// fuoco si propaga come gli altri. Anche le bombe: esplodendo danno fuoco
+// all'erba intorno e fanno esplodere quelle vicine, e il fuoco fa esplodere le
+// bombe che tocca (HdBurn_Bombs). Quando si spegne il cespuglio si comporta come quello tagliato:
 // sparisce, lascia i suoi resti e scopre cio' che nascondeva; il terreno resta
 // annerito anche lasciando l'area e tornandoci, finche' il gioco non fa
 // ricrescere il cespuglio. Le fiamme feriscono Link e i nemici che le toccano.
@@ -20,6 +22,11 @@
 // (Overworld_GetTileAttributeAtLocation la fa 0x0f) e torna acqua dopo 7
 // secondi (bacchetta) o 14 (Etere), o subito col fuoco. Cespugli ed erba
 // congelati invece restano, come i nemici congelati del gioco.
+// Indoors (houses and caves, not the dungeons) only the water freezes: the
+// game's water and the water that is only drawn (the tubs in the houses). The
+// frozen cells become ice (0x0f) in the room's attribute table, as the game
+// does when it changes a tile, so Link, enemies and objects all see ice; the
+// water comes back when the ice melts, and the list starts again in each room.
 // Fiamme, fumo, annerimento e ghiaccio sono disegnati da hd_fx.c.
 #include <stdlib.h>
 #include <string.h>
@@ -39,16 +46,26 @@
 extern int g_render_bias_x, g_render_bias_y;
 
 enum {
-  kMaxPending = 128,
+  kMaxPending = 256,
   kMaxScorched = 2048,   // tile annerite ricordate (10 byte l'una)
   kMaxFrozen = 1024,     // tile congelate ricordate
   kMaxWet = 64,          // tile appena sciolte ricordate
   kWetTime = 120,        // frame in cui la tile appena sciolta non prende fuoco
-  kSpreadAt = 20,        // frame in fiamme prima di passare il fuoco ai vicini...
-  kSpreadAtRand = 14,    // ...piu' fino a questi, a caso
+  // The same speed for every fire that spreads (Fire Rod, Lantern, bombs,
+  // Bombos): measured on FSA (the user's video, 13:26-13:35, a field of tall
+  // grass set on fire by a bomb) the front runs about 3 tiles a second, a
+  // tile every 20 frames or so; a tile burns about a second (kHdBurnTime)
+  kSpreadAt = 12,        // frame in fiamme prima di passare il fuoco ai vicini...
+  kSpreadAtRand = 8,     // ...piu' fino a questi, a caso
   kDelaySide = 2,        // ritardo per i vicini di lato (piu' fino a kDelayRand)
-  kDelayDiagonal = 14,   // e per quelli in diagonale, che sono piu' lontani
-  kDelayRand = 10,
+  kDelayDiagonal = 10,   // e per quelli in diagonale, che sono piu' lontani
+  kDelayRand = 6,
+  // Bombs ("Burn and freeze interaction"): a bomb going off sets the grass
+  // within kBlastFire pixels of its middle on fire and sets off the bombs
+  // within kBlastChain pixels after kChainDelay frames, while its first
+  // kBlastStages stages last (Ancilla07_Bomb, about 20 frames); a bomb on a
+  // burning tile goes off at once
+  kBlastFire = 24, kBlastChain = 32, kChainDelay = 8, kBlastStages = 5,
   kHarmlessAt = kHdBurnTime - 16,  // nelle ultime fiammelle il fuoco non fa piu' male
   // Danno a Link: quello degli sprite di fuoco del gioco (fuoco di Kodongo,
   // barre di fuoco: classe 4 di kPlayerDamages), un cuore con ogni armatura
@@ -62,12 +79,15 @@ enum {
 typedef struct Pending {
   uint16 x, y;
   uint8 timer;
+  uint16 fire;  // the fire it comes from (HdBurn_NewFire)
 } Pending;
 
 static Pending g_pending[kMaxPending];
 static int g_num_pending;
 static HdBurnTile g_burning[kHdMaxBurning];
 static uint8 g_spread_at[kHdMaxBurning];  // 0xff: non passa il fuoco ai vicini
+static uint16 g_fire_of[kHdMaxBurning];   // the fire each burning tile belongs to
+static uint16 g_fire_next;
 static int g_num_burning;
 static HdBurnTile g_scorched[kMaxScorched];
 static int g_num_scorched;
@@ -80,10 +100,14 @@ static uint32 g_frozen_ver = 1, g_hint_ver;
 // Tile appena sciolte dal fuoco: per un po' non bruciano, altrimenti la
 // fiammata (che controlla la stessa tile per piu' frame) o le fiamme vicine le
 // incendierebbero subito dopo
+// Only the fire that melted the tile is kept off: a new fire (another use of
+// the Lantern, another Fire Rod shot, a bomb, Bombos) sets it alight at once
 static Pending g_wet[kMaxWet];
 static int g_num_wet;
 static uint16 g_burn_area = 0xffff;
 static uint16 g_seen_area = 0xffff;  // per i segreti delle tile bruciate da lontano
+static uint16 g_ice_area = 0xffff;   // area of the last look at the ice (ForgetIceOnAreaLoad)
+static uint16 g_leaving_area = 0xffff;  // area left, still on the screen during the scroll
 static uint8 g_sfx_timer;
 static uint32 g_burn_rng = 0x2545f491;
 
@@ -93,8 +117,65 @@ static int Rand(int n) {
   return (g_burn_rng >> 16) % n;
 }
 
+// Inside a house or a cave (not a dungeon): only water freezes there
+static bool IndoorIce(void) {
+  return player_is_indoors && (cur_palace_index_x2 & 0xff) == 0xff;
+}
+
 static bool Enabled(void) {
-  return !player_is_indoors && (enhanced_features0 & kFeatures0_BurnAndFreeze);
+  return (!player_is_indoors || IndoorIce()) && (enhanced_features0 & kFeatures0_BurnAndFreeze);
+}
+
+// Indoors: water attribute each frozen cell had (0 = not changed), for the two
+// layers of the room's attribute table (BG2 0-0xfff, BG1 0x1000-0x1fff), and
+// the room they belong to
+static uint8 g_in_orig[0x2000];
+static int g_in_room = -1;
+
+// Index of the cell of world pixel (x, y) in the room's attribute table
+static inline int IndoorCell(uint16 x, uint16 y) {
+  return (y & 0x1f8) << 3 | (x & 0x1f8) >> 3;
+}
+
+static uint8 IndoorAttr(int i) {
+  return g_in_orig[i] ? g_in_orig[i] : dung_bg2_attr_table[i];
+}
+
+uint8 HdBurn_UnfrozenAttr(int i, uint8 a) {
+  i &= 0x1fff;
+  return a == 0x0f && g_in_orig[i] ? g_in_orig[i] : a;
+}
+
+// Turns the water cells of the tile into ice (on) or back into water (off)
+static void IndoorSetIce(uint16 x, uint16 y, bool on) {
+  if (!player_is_indoors || dungeon_room_index != g_in_room)
+    return;
+  for (int c = 0; c < 4; c++) {
+    int i0 = IndoorCell(x + (c & 1) * 8, y + (c >> 1) * 8);
+    for (int l = 0; l < 2; l++) {
+      int i = i0 + l * 0x1000;
+      uint8 a = dung_bg2_attr_table[i];
+      if (on && !g_in_orig[i] && HdWater_IsWaterAttr(a)) {
+        g_in_orig[i] = a;
+        dung_bg2_attr_table[i] = 0x0f;
+      } else if (!on && g_in_orig[i]) {
+        if (a == 0x0f)
+          dung_bg2_attr_table[i] = g_in_orig[i];
+        g_in_orig[i] = 0;
+      }
+    }
+  }
+}
+
+// All the frozen cells of the room back to water (restore) and the memory
+// cleared
+static void IndoorClear(bool restore) {
+  if (restore && player_is_indoors && dungeon_room_index == g_in_room) {
+    for (int i = 0; i < 0x2000; i++)
+      if (g_in_orig[i] && dung_bg2_attr_table[i] == 0x0f)
+        dung_bg2_attr_table[i] = g_in_orig[i];
+  }
+  memset(g_in_orig, 0, sizeof(g_in_orig));
 }
 
 // Cespuglio o erba alta: mappa16 che resta dopo e tipo dei resti
@@ -124,6 +205,8 @@ static int TilePos(uint16 x, uint16 y) {
 
 // Mappa16 della tile, anche nelle aree vicine col mondo unico; -1 se non si sa
 static int TileAt(uint16 x, uint16 y) {
+  if (player_is_indoors)
+    return -1;  // indoors only water freezes: no bushes or grass
   int pos = TilePos(x, y);
   if (pos >= 0)
     return overworld_tileattr[pos >> 1];
@@ -132,6 +215,8 @@ static int TileAt(uint16 x, uint16 y) {
 
 // Area della tile (con il bit del mondo, come overworld_area_index)
 static uint8 AreaOf(uint16 x, uint16 y) {
+  if (player_is_indoors)
+    return 0;  // one room at a time
   int head = TilePos(x, y) < 0 ? HdWorld_AreaAt(x, y) : -1;
   return head >= 0 ? (uint8)head : (uint8)overworld_area_index;
 }
@@ -144,6 +229,15 @@ static bool IsBurnable(uint16 x, uint16 y) {
 }
 
 uint8 HdBurn_WaterCells(uint16 x, uint16 y) {
+  if (player_is_indoors) {
+    uint8 mask = 0;
+    for (int c = 0; c < 4; c++) {
+      int i = IndoorCell(x + (c & 1) * 8, y + (c >> 1) * 8);
+      if (HdWater_IsWaterAttr(IndoorAttr(i)) || HdWater_IsWaterAttr(IndoorAttr(i + 0x1000)))
+        mask |= 1 << c;
+    }
+    return mask;
+  }
   int t = TileAt(x, y);
   if (t < 0 || HdWater_IsSky(x, y))  // cielo del Monte della Morte
     return 0;
@@ -153,16 +247,83 @@ uint8 HdBurn_WaterCells(uint16 x, uint16 y) {
   for (int i = 0; i < 4; i++) {
     int e = m8[i];
     // acqua alta o bassa, ma non le cascate (caselle 0x1ca-0x1cd, palette 7)
-    if (HdWater_IsWaterAttr(attr[e & 0x1ff]) && !HdWater_IsWaterfallEntry(e))
+    // waterfalls as the HD water draws them, with the hidden entrance between
+    // (only palette 7 can be a waterfall: the others need no look around)
+    if (HdWater_IsWaterAttr(attr[e & 0x1ff]) &&
+        ((e >> 10 & 7) != 7 || !HdWater_IsFallCellAt(x + (i & 1) * 8, y + (i >> 1) * 8)))
       mask |= 1 << i;
   }
   return mask;
 }
 
+// Cells of the tile that freeze: the game's water (HdBurn_WaterCells) and the
+// water that is only drawn, which the HD water fills (village troughs: the
+// tile is 0x126/0x127 over 0x136/0x137). The ice covers only the pixels drawn
+// as water of these cells (HdFx_FrozenWater), not the trough's rim
+static uint8 FreezableCells(uint16 x, uint16 y) {
+  uint8 mask = HdBurn_WaterCells(x, y);
+  if (player_is_indoors) {
+    // the blue tubs in the houses (HdWater_IsTubCell)
+    for (int c = 0; c < 4; c++)
+      if (HdWater_IsTubCell(IndoorCell(x + (c & 1) * 8, y + (c >> 1) * 8)))
+        mask |= 1 << c;
+    return mask;
+  }
+  int t = TileAt(x, y);
+  if (t < 0)
+    return mask;
+  const uint16 *m8 = GetMap16toMap8Table() + t * 4;
+  for (int i = 0; i < 2; i++)
+    if (HdWater_IsTroughPair(m8[i], m8[i + 2]))
+      mask |= 1 << i | 1 << (i + 2);
+  return mask;
+}
+
 bool HdBurn_TileShown(const HdBurnTile *t) {
+  if (player_is_indoors)
+    return true;  // the list holds only the room's tiles
   if (HdWorld_SeamlessOn())
     return !((t->area ^ overworld_area_index) & 0x40);
-  return t->area == (uint8)overworld_area_index;
+  // the area being left stays on the screen during the scroll: its ice and
+  // burns stay with it until the scroll ends (ForgetIceOnAreaLoad)
+  return t->area == (uint8)overworld_area_index || t->area == g_leaving_area;
+}
+
+// Keeps only the ice of the area being left (only_leaving), or all but it
+static void DropFrozen(bool only_leaving) {
+  int n = 0;
+  for (int i = 0; i < g_num_frozen; i++)
+    if ((g_frozen[i].area == g_leaving_area) == only_leaving)
+      g_frozen[n++] = g_frozen[i];
+  if (n != g_num_frozen)
+    g_num_frozen = n, g_frozen_ver++;
+}
+
+// Without the continuous world the game loads every area anew: the bushes
+// cut or burned grow again, and so the ice goes too, on bushes, grass and
+// water. At the area change the ice of the area entered (from an earlier
+// visit) goes at once, also during the scroll, when HdBurn_Update does not
+// run (the drawing asks for the ice first); the ice of the area left goes
+// when the scroll ends. With the continuous world the areas keep their
+// changes (hd_world.c), the ice too
+static void ForgetIceOnAreaLoad(void) {
+  if (player_is_indoors)
+    return;
+  bool continuous = (enhanced_features0 & kFeatures0_ContinuousWorld) != 0;
+  if (g_ice_area != overworld_area_index) {
+    g_leaving_area = continuous || g_ice_area == 0xffff ? 0xffff : g_ice_area;
+    if (!continuous)
+      DropFrozen(true);
+    g_ice_area = overworld_area_index;
+  }
+  if (g_leaving_area != 0xffff && HdFx_LiveOutdoors()) {
+    DropFrozen(false);
+    g_leaving_area = 0xffff;
+  }
+}
+
+bool HdBurn_ScorchShown(const HdBurnTile *t) {
+  return HdBurn_TileShown(t) && !IsBurnable(t->x, t->y);
 }
 
 // Spegne l'incendio in corso (le tile annerite restano)
@@ -244,37 +405,37 @@ static void AddScorched(HdBurnTile t) {
   PushDropOldest(g_scorched, g_num_scorched, kMaxScorched, t);
 }
 
-static bool IsWet(uint16 x, uint16 y) {
+static bool IsWet(uint16 x, uint16 y, uint16 fire) {
   for (int i = 0; i < g_num_wet; i++)
-    if (g_wet[i].x == x && g_wet[i].y == y)
+    if (g_wet[i].x == x && g_wet[i].y == y && g_wet[i].fire == fire)
       return true;
   return false;
 }
 
 // Il fuoco scioglie il ghiaccio della tile: resta bagnata per kWetTime frame
-static void Melt(int f) {
+static void Melt(int f, uint16 fire) {
   HdBurnTile t = g_frozen[f];
   RemoveFrozen(f);
-  PushDropOldest(g_wet, g_num_wet, kMaxWet, ((Pending){ t.x, t.y, kWetTime }));
+  PushDropOldest(g_wet, g_num_wet, kMaxWet, ((Pending){ t.x, t.y, kWetTime, fire }));
 }
 
-static void Queue(uint16 x, uint16 y, uint8 timer) {
+static void Queue(uint16 x, uint16 y, uint8 timer, uint16 fire) {
   if (FindBurning(x, y) >= 0)
     return;
   if (FindPending(x, y) >= 0)
     return;
   if (g_num_pending < kMaxPending)
-    g_pending[g_num_pending++] = (Pending){ x, y, timer };
+    g_pending[g_num_pending++] = (Pending){ x, y, timer, fire };
 }
 
 // La tile (gia' allineata a 16) prende fuoco; se e' congelata il ghiaccio si
 // scioglie e la tile non brucia (ne' subito dopo, finche' e' bagnata)
-static bool StartBurning(uint16 x, uint16 y, bool spread) {
-  if (!IsBurnable(x, y) || FindBurning(x, y) >= 0 || g_num_burning >= kHdMaxBurning || IsWet(x, y))
+static bool StartBurning(uint16 x, uint16 y, bool spread, uint16 fire) {
+  if (!IsBurnable(x, y) || FindBurning(x, y) >= 0 || g_num_burning >= kHdMaxBurning || IsWet(x, y, fire))
     return false;
   int f = FindFrozen(x, y);
   if (f >= 0) {
-    Melt(f);
+    Melt(f, fire);
     return false;
   }
   if (FireInOtherArea())
@@ -283,6 +444,7 @@ static bool StartBurning(uint16 x, uint16 y, bool spread) {
   int i = g_num_burning++;
   g_burning[i] = (HdBurnTile){ x, y, 0, (uint8)Rand(256), AreaOf(x, y) };
   g_spread_at[i] = spread ? kSpreadAt + Rand(kSpreadAtRand) : 0xff;
+  g_fire_of[i] = fire;
   if (g_sfx_timer == 0) {
     sound_effect_1 = CalculateSfxPan(x) | 0x2a;
     g_sfx_timer = 12;
@@ -290,11 +452,11 @@ static bool StartBurning(uint16 x, uint16 y, bool spread) {
   return true;
 }
 
-static void Spread(uint16 x, uint16 y) {
+static void Spread(uint16 x, uint16 y, uint16 fire) {
   for (int dy = -16; dy <= 16; dy += 16) {
     for (int dx = -16; dx <= 16; dx += 16) {
       if ((dx | dy) && IsBurnable(x + dx, y + dy))
-        Queue(x + dx, y + dy, ((dx && dy) ? kDelayDiagonal : kDelaySide) + Rand(kDelayRand));
+        Queue(x + dx, y + dy, ((dx && dy) ? kDelayDiagonal : kDelaySide) + Rand(kDelayRand), fire);
     }
   }
 }
@@ -389,7 +551,7 @@ static void BurnOut(uint16 x, uint16 y) {
 // l'acqua; il ghiaccio d'acqua gia' fatto torna nuovo se cosi' dura di piu'
 static bool StartFreezing(uint16 x, uint16 y, uint8 water, bool only_water) {
   bool burnable = !only_water && IsBurnable(x, y);
-  if (!burnable && !(water && HdBurn_WaterCells(x, y)))
+  if (!burnable && !(water && FreezableCells(x, y)))
     return false;
   int f = FindFrozen(x, y);
   if (f >= 0) {
@@ -404,6 +566,7 @@ static bool StartFreezing(uint16 x, uint16 y, uint8 water, bool only_water) {
   }
   if (!burnable) {
     AddFrozen((HdBurnTile){ x, y, 0, (uint8)Rand(256), AreaOf(x, y), 0, water });
+    IndoorSetIce(x, y, true);
     return true;
   }
   int b = FindBurning(x, y);
@@ -440,14 +603,18 @@ static void MeltWater(uint16 x, uint16 y) {
     g_frozen[f] = n;
 }
 
-bool HdBurn_Ignite(uint16 x, uint16 y, bool spread) {
+uint16 HdBurn_NewFire(void) {
+  return ++g_fire_next ? g_fire_next : ++g_fire_next;  // 0 is never a fire
+}
+
+bool HdBurn_Ignite(uint16 x, uint16 y, bool spread, uint16 fire) {
   if (!Enabled())
     return false;
   MeltWater(x & ~0xf, y & ~0xf);
   // sotto la pioggia il fuoco non attecchisce
   if (HdFx_IsRainingOutdoors())
     return false;
-  return StartBurning(x & ~0xf, y & ~0xf, spread);
+  return StartBurning(x & ~0xf, y & ~0xf, spread, fire);
 }
 
 bool HdBurn_Freeze(uint16 x, uint16 y) {
@@ -477,9 +644,67 @@ void HdBurn_IgniteScreen(void) {
       MeltWater(x0 + x, y0 + y);
   if (HdFx_IsRainingOutdoors())
     return;
+  // all at once, and from there the fire goes on to the grass beyond the
+  // view as any other fire (the user asked for it)
+  uint16 fire = HdBurn_NewFire();
   for (int y = 0; y < h; y += 16)
     for (int x = 0; x < w; x += 16)
-      StartBurning(x0 + x, y0 + y, false);
+      StartBurning(x0 + x, y0 + y, true, fire);
+}
+
+// ---------------------------------------------------------------------------
+// Bombs and fire ("Burn and freeze interaction"), as in FSA: a bomb going off
+// sets off the bombs near it and sets the grass around it on fire; the fire
+// in the grass sets off the bombs on it. Bombs: Link's (ancilla 7) and the
+// enemies' (sprite 0x4a); Bombs_SetOff (ancilla.c) is the one rule that sets
+// a bomb off, also for the ring of the charged hammer
+static bool g_blast_seen_anc[kAncilla_Slots], g_blast_seen_spr[16];
+static int g_blast_x, g_blast_y;
+
+static bool NearBlast(int x, int y, void *ctx) {
+  int dx = x - g_blast_x, dy = y - g_blast_y;
+  return dx * dx + dy * dy <= kBlastChain * kBlastChain;
+}
+
+static bool OnFire(int x, int y, void *ctx) {
+  int i = FindBurning(x & ~0xf, y & ~0xf);
+  return i >= 0 && g_burning[i].age < kHarmlessAt;
+}
+
+// A bomb going off with its middle at (x, y); first: its first frame
+static void Blast(int x, int y, bool first) {
+  if (first && Enabled()) {
+    uint16 fire = HdBurn_NewFire();
+    for (int dy = -32; dy <= 32; dy += 16)
+      for (int dx = -32; dx <= 32; dx += 16) {
+        int tx = (x + dx) & ~0xf, ty = (y + dy) & ~0xf;
+        int ex = tx + 8 - x, ey = ty + 8 - y;
+        if (ex * ex + ey * ey <= kBlastFire * kBlastFire)
+          HdBurn_Ignite((uint16)tx, (uint16)ty, true, fire);
+      }
+  }
+  g_blast_x = x, g_blast_y = y;
+  Bombs_SetOff(NearBlast, NULL, kChainDelay);
+}
+
+void HdBurn_Bombs(void) {
+  if (!(enhanced_features0 & kFeatures0_BurnAndFreeze) || submodule_index)
+    return;
+  for (int k = 0; k < kAncilla_Slots; k++) {
+    bool on = ancilla_type[k] == 7 && ancilla_item_to_link[k] != 0;
+    if (on && ancilla_item_to_link[k] <= kBlastStages)
+      Blast(Ancilla_GetX(k), Ancilla_GetY(k), !g_blast_seen_anc[k]);  // its middle
+    g_blast_seen_anc[k] = on;
+  }
+  for (int k = 0; k < 16; k++) {
+    // SpriteBomb_ExplosionIncoming: sprite_C 2 from the blast, 31 frames
+    bool on = sprite_state[k] && sprite_type[k] == 0x4a && sprite_C[k] >= 2;
+    if (on && sprite_delay_aux1[k] >= 31 - 4 * kBlastStages)
+      Blast(Sprite_GetX(k) + 8, Sprite_GetY(k) + 8, !g_blast_seen_spr[k]);
+    g_blast_seen_spr[k] = on;
+  }
+  if (g_num_burning && Enabled())
+    Bombs_SetOff(OnFire, NULL, 1);
 }
 
 void HdBurn_FreezeScreen(void) {
@@ -510,7 +735,8 @@ bool HdBurn_TakeFrozen(uint16 x, uint16 y) {
 }
 
 bool HdBurn_IsFrozenAt(uint16 x, uint16 y) {
-  if (player_is_indoors || g_num_frozen == 0)
+  ForgetIceOnAreaLoad();
+  if ((player_is_indoors && !IndoorIce()) || g_num_frozen == 0)
     return false;
   x &= ~0xf, y &= ~0xf;
   int f = FindFrozen(x, y);
@@ -518,11 +744,13 @@ bool HdBurn_IsFrozenAt(uint16 x, uint16 y) {
 }
 
 void HdBurn_Reset(void) {
+  IndoorClear(true);
   ClearAll();
   g_num_scorched = 0;
   g_num_frozen = 0;
   g_frozen_ver++;
   g_num_wet = 0;
+  g_leaving_area = 0xffff;
 }
 
 // Link e' entrato in un'area dove il fuoco era arrivato da un'area vicina:
@@ -547,13 +775,29 @@ static void RevealRemoteSecrets(void) {
 
 void HdBurn_Update(void) {
   if (player_is_indoors) {
-    HdBurn_Reset();
-    return;
+    // a new room: its attribute table is loaded again, nothing to restore
+    if (dungeon_room_index != g_in_room) {
+      IndoorClear(false);
+      HdBurn_Reset();
+      g_in_room = dungeon_room_index;
+    }
+    if (!IndoorIce()) {
+      HdBurn_Reset();
+      return;
+    }
+    if (main_module_index != 7 || submodule_index != 0)
+      return;  // the ice waits during menus and room changes
+  } else {
+    if (g_in_room >= 0) {
+      IndoorClear(false);
+      g_in_room = -1;
+    }
+    ForgetIceOnAreaLoad();
+    // Il fuoco si ferma durante menu e transizioni
+    if (!HdFx_LiveOutdoors())
+      return;
   }
-  // Il fuoco si ferma durante menu e transizioni
-  if (!HdFx_LiveOverworld())
-    return;
-  if (g_seen_area != overworld_area_index) {
+  if (!player_is_indoors && g_seen_area != overworld_area_index) {
     g_seen_area = overworld_area_index;
     RevealRemoteSecrets();
   }
@@ -577,8 +821,11 @@ void HdBurn_Update(void) {
   for (int i = 0; i < g_num_frozen; i++) {
     HdBurnTile s = g_frozen[i];
     if (HdBurn_TileShown(&s)) {
-      if (s.water ? HdBurn_IceLeft(&s) <= 0 || !HdBurn_WaterCells(s.x, s.y) : !IsBurnable(s.x, s.y))
+      if (s.water ? HdBurn_IceLeft(&s) <= 0 || !FreezableCells(s.x, s.y) : !IsBurnable(s.x, s.y)) {
+        if (s.water)
+          IndoorSetIce(s.x, s.y, false);
         continue;
+      }
       if (s.age < 0xffff)
         s.age++;
     }
@@ -618,16 +865,18 @@ void HdBurn_Update(void) {
   }
   g_num_pending = n;
   for (int i = 0; i < num_ready; i++)
-    StartBurning(ready[i].x, ready[i].y, true);
+    StartBurning(ready[i].x, ready[i].y, true, ready[i].fire);
 
   // Tile in fiamme: passano il fuoco ai vicini, poi si spengono
   n = 0;
   int num_out = 0;
   static HdBurnTile out[kHdMaxBurning], spread[kHdMaxBurning];
+  static uint16 spread_fire[kHdMaxBurning];
   int num_spread = 0;
   for (int i = 0; i < g_num_burning; i++) {
     HdBurnTile b = g_burning[i];
     uint8 spread_at = g_spread_at[i];
+    uint16 fire = g_fire_of[i];
     if (!IsBurnable(b.x, b.y))
       continue;  // tagliato o sollevato mentre bruciava: le fiamme spariscono
     b.age++;
@@ -636,17 +885,18 @@ void HdBurn_Update(void) {
       HurtSprites(b.x, b.y);
     }
     if (b.age == spread_at)
-      spread[num_spread++] = b;
+      spread_fire[num_spread] = fire, spread[num_spread++] = b;
     if (b.age >= kHdBurnTime) {
       out[num_out++] = b;
       continue;
     }
     g_spread_at[n] = spread_at;
+    g_fire_of[n] = fire;
     g_burning[n++] = b;
   }
   g_num_burning = n;
   for (int i = 0; i < num_spread; i++)
-    Spread(spread[i].x, spread[i].y);
+    Spread(spread[i].x, spread[i].y, spread_fire[i]);
   for (int i = 0; i < num_out; i++)
     BurnOut(out[i].x, out[i].y);
 }
@@ -659,11 +909,13 @@ int HdBurn_GetBurning(const HdBurnTile **tiles) {
 }
 
 int HdBurn_GetScorched(const HdBurnTile **tiles) {
+  ForgetIceOnAreaLoad();
   *tiles = g_scorched;
   return player_is_indoors ? 0 : g_num_scorched;
 }
 
 int HdBurn_GetFrozen(const HdBurnTile **tiles) {
+  ForgetIceOnAreaLoad();
   *tiles = g_frozen;
-  return player_is_indoors ? 0 : g_num_frozen;
+  return player_is_indoors && !IndoorIce() ? 0 : g_num_frozen;
 }

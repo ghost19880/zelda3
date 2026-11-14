@@ -117,6 +117,12 @@ void Player_Sword_SpinAttackJerks_HoldDown();
 void LinkItem_Rod();
 // true while the item button btn (0 = Y, 1 = X, 2 = L, 3 = R) is held
 bool Link_ItemButtonHeld(int btn);
+// charged hammer (FsaItems): true during the swing of a charged blow
+bool Link_HammerBlowCharged(void);
+// FsaItems: true with the point struck while the hammer is down
+bool Link_HammerDownAt(int *x, int *y);
+// the ring of the charged blow sets off the bombs it reaches (once a frame)
+void Link_HammerRingTick(void);
 void LinkItem_Hammer();
 void LinkItem_Bow();
 void LinkItem_Boomerang();

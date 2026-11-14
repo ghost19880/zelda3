@@ -126,6 +126,12 @@ bool HdFx_DeathShowsWorld(void);
 bool HdFx_DungeonRoomRuns(void);
 // Si gioca all'aperto (9/0): niente menu, transizioni o scene
 bool HdFx_LiveOverworld(void);
+bool HdFx_LiveOutdoors(void);
+// The scene module mod is outdoors: a world area (9) or a special one (11)
+bool HdFx_OutdoorScene(int mod);
+// The last screen line past the area's bottom edge repeats the row above
+// (PPU line loop, zelda_rtl.c: before and after each line)
+void HdFx_AreaEdgeLine(int line, bool before);
 // Una partita e' caricata: non titolo, scelta del file o dimostrazione
 bool HdFx_GameLoaded(void);
 // Labirinto in una fase diversa dal gioco (passaggi fra stanze, scale...)
@@ -189,7 +195,10 @@ void HdFx_FadePost(uint8 *pixels, int pitch, int width, int height);
 // White the game added to the whole scene (0-1): shadows go under it
 void HdFx_MeasureWhite(const uint8 *pixels, int pitch, int width, int height);
 float HdFx_WhiteFloor(void);
-// Mosaico del gioco anche sulle aggiunte HD (stessi quadrati della PPU)
+// Mosaico del gioco anche sulle aggiunte HD (stessi quadrati della PPU);
+// HdFx_MosaicBeforeEffects notes the game's sprites and HUD before the HD
+// effects, so the sharp HD drops and sparks are broken up as well
+void HdFx_MosaicBeforeEffects(uint8 *pixels, int pitch, int width, int height);
 void HdFx_Mosaic(uint8 *pixels, int pitch, int width, int height);
 // Cielo e nuvole dietro la Piramide e sul Monte della Morte: lo shader non li dipinge
 void HdFx_MarkBackdrop(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y);
@@ -198,6 +207,10 @@ void HdFx_SpriteShadows(uint8 *pixels, int pitch, int width, int height);
 // Prima e dopo il disegno della PPU: sceglie gli sprite che fanno ombra e
 // nasconde l'ombra del gioco dei nemici a terra
 void HdFx_ShadowsBeforeRender(Ppu *ppu, int width, int height);
+bool HdFx_ShadowMarks(Ppu *ppu, int height, const uint8 *owner, const uint8 *link, uint8 *cast, bool *hide);
+int HdFx_HideShadows(Ppu *ppu, const bool *hide, uint8 *idx, uint16 *saved);
+void HdFx_ShowHiddenShadows(Ppu *ppu, const uint8 *idx, const uint16 *saved, int n);
+uint8 *HdFx_ShadowSource(void);
 void HdFx_ShadowsAfterRender(Ppu *ppu);
 // Cespugli congelati sollevati o lanciati e i loro pezzi (hd_burn.c): la PPU
 // li disegna con i blu dei nemici congelati
@@ -210,6 +223,10 @@ void HdFx_SuperBombBeforeRender(Ppu *ppu);
 // quella del gioco, dopo la rimette nei registri; HdFx_Fog la disegna
 void HdFx_FogBeforeRender(Ppu *ppu);
 void HdFx_FogAfterRender(Ppu *ppu);
+// Improved rain: the game's drops are drawn as the plain dark rain layer from
+// before the PPU draws until after HdWorld_Composite (only our drops fall)
+void HdFx_RainBeforeRender(Ppu *ppu);
+void HdFx_RainAfterComposite(Ppu *ppu);
 void HdFx_Fog(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y);
 // In questo frame la nebbia del gioco e' sostituita (hd_world.c non la somma)
 bool HdFx_FogReplacesOverlay(void);
@@ -232,7 +249,7 @@ int HdFx_BoomerangGhostDue(void);
 void HdFx_BoomerangGhost(int wx, int wy, int tile, uint8 flags);
 // Four Swords Adventures hammer (FsaItems): shock wave from the world point
 // (wx, wy) where the hammer hit the ground (hd_fx.c)
-void HdFx_HammerWave(int wx, int wy);
+void HdFx_HammerWave(int wx, int wy, bool charged);
 void HdFx_HammerWaves(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y);
 
 // Screen brightness of the frame being drawn (INIDISP, 0 = black or forced

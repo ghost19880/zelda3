@@ -17,6 +17,8 @@
 #include "tagalong.h"
 #include "ancilla.h"
 #include "sprite.h"
+#include "assets.h"
+#include "load_gfx.h"
 
 const uint16 *Dungeon_GetObjectTiles(int subtype, int idx);
 
@@ -97,6 +99,41 @@ bool HdFx_InGameplay(int *mod_out) {
   if (main_module_index == 26 && submodule_index < 32 && !(submodule_index & 1))
     return false;
   return mod == 7 || mod == 9 || mod == 11;
+}
+
+// The scene module mod is outdoors: an area of the world (9) or a special
+// outdoor area (11: Zora's waterfall, the Master Sword's wood...)
+bool HdFx_OutdoorScene(int mod) {
+  return mod == 9 || mod == 11;
+}
+
+// Outdoors without the continuous world the view stops at the area's edge,
+// yet the screen starts at PPU line 1: with the view at its lowest the last
+// line shows the first row past the area, which the game never loads (a
+// stray green line, also under the water south of Zora's waterfall). That
+// line shows the area's last row again. Called by the PPU line loop
+// (zelda_rtl.c) before each line and after it (before = false) to restore
+void HdFx_AreaEdgeLine(int line, bool before) {
+  static uint16 saved[2];
+  static bool shifted;
+  Ppu *ppu = g_zenv.ppu;
+  if (!before) {
+    if (shifted)
+      ppu->bgLayer[0].vScroll = saved[0], ppu->bgLayer[1].vScroll = saved[1], shifted = false;
+    return;
+  }
+  if (line < 224 || ppu->mode == 7 || HdWorld_Active() ||
+      ppu->bgLayer[1].vScroll + ppu->bgBiasY + line != ow_scroll_vars0.yend + 224)
+    return;
+  int mod = HdFx_SceneModule();
+  if (mod == 14)
+    mod = saved_module_for_menu;
+  if (!HdFx_OutdoorScene(mod) || (main_module_index != 14 && submodule_index != 0))
+    return;
+  saved[0] = ppu->bgLayer[0].vScroll, saved[1] = ppu->bgLayer[1].vScroll;
+  ppu->bgLayer[0].vScroll = (saved[0] - 1) & 0x3ff;
+  ppu->bgLayer[1].vScroll = (saved[1] - 1) & 0x3ff;
+  shifted = true;
 }
 
 // Avanza le animazioni una volta per frame di gioco (non per ogni disegno)
@@ -365,30 +402,269 @@ static void DrawBoomerangGhosts(uint8 *pixels, int pitch, int width, int height,
 //   pixels away, less and less up to 85), comes back to 3.5 in 5 frames and
 //   then snaps back, Link and the enemies on it as well: the screen far away
 //   does not move;
-// - a veil opens out from the hit, a disc brighter towards its edge (at most
-//   about 15% towards white) with a soft rim, out to 52 pixels in 12 frames,
-//   fast at first and slowing down (radius = 52 * (1 - (1 - u)^2));
+// - a light opens out from the hit, measured as the mean brightness at each
+//   distance against the frame before the blow (zt-lavoro/fuoco/radial.js):
+//   first a disc about 17 pixels wide, brighter towards its edge (+60 of 255
+//   there, alpha about 0.32) for 5 frames; then it turns into a thin ring,
+//   clear inside, going out evenly at 3.1 pixels a frame from 22 pixels to 50
+//   (frame 13), about +30 bright (alpha 0.18) and 6 pixels thick at first,
+//   fainter and thinner as it goes (2 pixels and alpha 0.05 in its last
+//   frame), gone at frame 14: a soft white rim at its reach before it goes;
 // - a pale cloud about 10 pixels wide stays on the hit for 15 frames and then
 //   fades out in about 20.
 // Our own drawing of those numbers: nothing from FSA.
 enum {
   kHammerWaves = 4,
-  kHammerWaveLife = 14, kHammerWaveRadius = 52,  // veil
   kHammerJoltLife = 6, kHammerJoltReach = 85,    // ground drop
   kHammerPuffHold = 18, kHammerPuffLife = 42,    // cloud on the hit
   kHammerWaveBox = 2 * (kHammerJoltReach + 10),
 };
+static const float kHammerDiscLife = 4.8f, kHammerDiscRadius = 17, kHammerDiscAlpha = 0.32f;
+static const float kHammerRingStart = 22, kHammerRingSpeed = 3.1f, kHammerRingEnd = 14.4f;
+
+// The ring of the plain blow at t frames: radius, alpha, thickness (full
+// width at half height); false while there is none
+static bool PlainRing(float t, float *r, float *a, float *w) {
+  if (t < kHammerDiscLife || t >= kHammerRingEnd)
+    return false;
+  *r = kHammerRingStart + kHammerRingSpeed * (t - kHammerDiscLife);
+  *a = t < 9.6f ? 0.18f : t < 13.2f ? 0.18f - 0.13f * (t - 9.6f) / 3.6f :
+       0.05f * (kHammerRingEnd - t) / (kHammerRingEnd - 13.2f);
+  float wd = 6 - 0.55f * (t - 6);
+  *w = wd < 6 ? (wd > 2 ? wd : 2) : 6;
+  return true;
+}
+
+// The charged blow (Link_HammerBlowCharged), measured the same way on FSA's
+// charged blow (Dolphin video, 50 frames a second: times * 1.2):
+// - the whole screen but the HUD jolts up and down, only up and down, about 2
+//   pixels, the other way every 2 frames, less and less, still in 24 frames;
+// - near the hit the ground drops 12 pixels (all of it up to 25 pixels away,
+//   nothing at 60) and stays down 22 frames, then snaps back;
+// - a ripple goes out across the whole screen and the ground itself rises
+//   with it (everything on the ground it crosses bends: cliffs, shores; not
+//   Link nor the enemies, they only follow the jolt), its crest at
+//   47 + 2.63 t pixels. The ground: a swell about 50 pixels behind the crest,
+//   up 6.8 pixels at 63 pixels from the hit and 3.5 at 112 (7 * 63 / d), with
+//   a small dip (a quarter of it) ahead of it (ChargedSwell). Its light: from
+//   outside in a bright crest about 8 pixels wide, a dark trough 33 pixels
+//   wide, darker inwards, a sharp step to a bright band 25 pixels wide, then
+//   nothing. Its light is partly the same all round and partly from one side:
+//   lit as from the top left, so towards the bottom right the trough is
+//   darkest and the band brightest and towards the top left the other way
+//   round, along the other diagonal only the part all round
+//   (ChargedRipple: brightness against the frame before, of 255);
+// - a thin bright ring, fast (7.9 pixels a frame), from about 68 pixels at
+//   frame 5 to 131 at frame 13, then gone;
+// - a big white flash on the hit for 2-3 frames and the cloud twice as big.
+enum {
+  kChargedShakeLife = 24,
+  kChargedDropLife = 22, kChargedDropFull = 25, kChargedDropReach = 60,
+  kChargedFlashLife = 3,
+  kChargedRingFade = 60, kChargedLife = 90,
+};
+static const float kChargedDrop = 12;
+static const float kChargedCrestStart = 47, kChargedCrestSpeed = 2.63f, kChargedSwell = 6.8f;
+static const float kChargedFastStart = 5, kChargedFastEnd = 14, kChargedFastSpeed = 7.9f, kChargedFastFrom = 68;
+
+// The ripple of light of the charged blow at s pixels from its crest
+// (negative inside): brightness change (of 255) the same all round (*iso) and
+// lit from the top left (*dir, times the cosine towards the bottom right).
+// The edges are soft as in FSA: the dark one inside goes from about 0 to -50
+// in 5-6 pixels, the crest fades out in 7, smooth steps between the points
+static void ChargedRipple(float s, float *iso, float *dir) {
+  static const float kS[] = { -80, -70, -51, -45, -40, -11, -6, 2, 9 };
+  static const float kIso[] = { 0, 0, 0, -13, -16, -5, 11, 11, 0 };
+  static const float kDir[] = { 0, 30, 12, -42, -50, -15, 20, 20, 0 };
+  *iso = *dir = 0;
+  if (s <= kS[0] || s >= kS[8])
+    return;
+  int i = 0;
+  while (s > kS[i + 1])
+    i++;
+  float f = (s - kS[i]) / (kS[i + 1] - kS[i]);
+  f = f * f * (3 - 2 * f);
+  *iso = kIso[i] + (kIso[i + 1] - kIso[i]) * f;
+  *dir = kDir[i] + (kDir[i + 1] - kDir[i]) * f;
+}
+
+// Height of the ground in the ripple of the charged blow at s pixels from its
+// crest, 1 at the top of the swell (where the light of ChargedRipple turns
+// from the lit slope to the dark one), smooth steps between the points
+static float ChargedSwell(float s) {
+  static const float kS[] = { -85, -70, -51, -40, -25, -11, 2, 9 };
+  static const float kH[] = { 0, 0.35f, 1, 0.85f, 0.2f, -0.25f, -0.1f, 0 };
+  if (s <= kS[0] || s >= kS[7])
+    return 0;
+  int i = 0;
+  while (s > kS[i + 1])
+    i++;
+  float f = (s - kS[i]) / (kS[i + 1] - kS[i]);
+  f = f * f * (3 - 2 * f);
+  return kH[i] + (kH[i + 1] - kH[i]) * f;
+}
+
+// Adds v of 255 to the brightness of c (towards white or black)
+static uint32 AddBrightness(uint32 c, float v) {
+  float l = 0.299f * ((c >> 16) & 0xff) + 0.587f * ((c >> 8) & 0xff) + 0.114f * (c & 0xff);
+  if (v > 0)
+    return l < 254 ? HdFx_MixRgb(c, 255, 255, 255, HdFx_Clamp01(v / (255 - l))) : c;
+  return l > 1 ? HdFx_MixRgb(c, 0, 0, 0, HdFx_Clamp01(-v / l)) : c;
+}
 
 typedef struct HammerWave {
   int16 x, y;  // world position of the hit
   uint8 age;
   bool on;
+  bool charged;
 } HammerWave;
 
 static HammerWave g_hammer_wave[kHammerWaves];
 static uint8 g_hammer_wave_frame;
 
-void HdFx_HammerWave(int wx, int wy) {
+// Bombs going off, Link's (ancilla 7) and the enemies' (sprite 0x4a): the
+// blows of the hammer leave their explosion as the game draws it, not moved
+// nor lit. Boxes on the screen around the explosion (its pieces reach 12
+// pixels out on every side of its 16x16 middle for the enemies' bombs, 17 for
+// Link's: AncillaDraw_Explosion)
+enum { kMaxBlasts = 16, kBlastMargin = 18 };
+typedef struct BlastBox { int x0, y0, x1, y1; } BlastBox;
+static BlastBox g_blast[kMaxBlasts];
+static int g_blast_n;
+
+static void AddBlast(int sx, int sy) {
+  if (g_blast_n < kMaxBlasts)
+    g_blast[g_blast_n++] = (BlastBox){ sx - kBlastMargin, sy - kBlastMargin, sx + 16 + kBlastMargin, sy + 16 + kBlastMargin };
+}
+
+static void FindBlasts(int cam_x, int cam_y, int ext) {
+  g_blast_n = 0;
+  for (int k = 0; k < kAncilla_Slots; k++)
+    if (ancilla_type[k] == 7 && ancilla_item_to_link[k] != 0)
+      AddBlast(Ancilla_GetX(k) - 8 - cam_x + ext, Ancilla_GetY(k) - 8 - (int8)ancilla_z[k] - cam_y);  // its middle
+  for (int k = 0; k < 16; k++)
+    if (sprite_state[k] && sprite_type[k] == 0x4a && sprite_C[k] >= 2)
+      AddBlast(Sprite_GetX(k) - cam_x + ext, Sprite_GetY(k) - sprite_z[k] - cam_y);
+}
+
+// a sprite pixel of an explosion at (px, py) on the screen
+static bool IsBlastPixel(uint32 c, int px, int py) {
+  uint32 l = c >> 24;
+  if (!g_blast_n || (l != 4 && l != 6))
+    return false;
+  for (int i = 0; i < g_blast_n; i++)
+    if (px >= g_blast[i].x0 && px < g_blast[i].x1 && py >= g_blast[i].y0 && py < g_blast[i].y1)
+      return true;
+  return false;
+}
+
+// Strength of the ripple of light of the charged blow at t frames: full, a
+// bit weaker after 20 frames, fading out from kChargedRingFade
+static float ChargedRippleAmp(int t) {
+  if (t >= kChargedLife)
+    return 0;
+  float a = t < 20 ? 1 : 0.85f;
+  if (t >= kChargedRingFade)
+    a *= 1 - (float)(t - kChargedRingFade) / (kChargedLife - kChargedRingFade);
+  return a;
+}
+
+// The charged blow over the whole picture (src: copy of it as it was)
+static void DrawChargedBlow(HammerWave *w, uint32 *src, uint8 *pixels, int pitch,
+                            int width, int height, float cx, float cy) {
+  int t = w->age - 1;  // 0 in the first frame drawn
+  int shake = 0;
+  if (t < kChargedShakeLife) {
+    shake = (int)(2.0f * (kChargedShakeLife - t) / kChargedShakeLife + 0.5f);
+    if ((t >> 1) & 1)
+      shake = -shake;
+  }
+  float drop = t < kChargedDropLife ? kChargedDrop : 0;
+  float crest = kChargedCrestStart + kChargedCrestSpeed * t, amp = ChargedRippleAmp(t);
+  // the fast thin ring
+  bool fast = t >= kChargedFastStart && t < kChargedFastEnd;
+  float fast_r = kChargedFastFrom + kChargedFastSpeed * (t - kChargedFastStart);
+  float fast_v = !fast ? 0 : t < kChargedFastEnd - 3 ? 20 : 20 * (kChargedFastEnd - t) / 3;
+  float puff_a = t < kHammerPuffHold ? 0.35f :
+      0.35f * (float)(kHammerPuffLife - 1 - t) / (kHammerPuffLife - 1 - kHammerPuffHold);
+  if (puff_a < 0)
+    puff_a = 0;
+  float flash_a = t < kChargedFlashLife ? 0.75f * (kChargedFlashLife - t) / kChargedFlashLife : 0;
+  for (int y = 0; y < height; y++)
+    memcpy(src + y * width, pixels + y * pitch, width * 4);
+  for (int py = 0; py < height; py++) {
+    uint32 *row = (uint32 *)(pixels + py * pitch);
+    float dy = py + 0.5f - cy;
+    for (int px = 0; px < width; px++) {
+      uint32 c = src[py * width + px];
+      if ((c >> 24) == 2 || IsBlastPixel(c, px, py))
+        continue;  // the HUD and the explosions stay
+      // Link and the enemies only follow the jolt (FSA's camera shake): the
+      // drop and the swell bend the ground under them, not them (measured on
+      // FSA's charged blow: Link stays where he is while the cliff behind him
+      // and the ground around him move)
+      int jy = py - shake;
+      uint32 sp = jy >= 0 && jy < height ? src[jy * width + px] : 0x02000000;
+      if (((sp >> 24) == 4 || (sp >> 24) == 6) && !IsBlastPixel(sp, px, jy)) {
+        row[px] = sp;
+        continue;
+      }
+      float dx = px + 0.5f - cx;
+      float d = sqrtf(dx * dx + dy * dy);
+      // whole ground shift here: jolt and drop near the hit
+      float sh = (float)shake;
+      if (drop > 0 && d < kChargedDropReach)
+        sh += drop * (d <= kChargedDropFull ? 1 : (kChargedDropReach - d) / (kChargedDropReach - kChargedDropFull));
+      // the swell of the ripple: the ground rises (drawn higher up)
+      if (amp > 0)
+        sh -= amp * kChargedSwell * 63 / (d > 40 ? d : 40) * ChargedSwell(d - crest);
+      int iy = py - (int)floorf(sh + 0.5f);
+      if (iy != py || HdFx_IsHudOrSprite(c)) {
+        // the ground from there: under a sprite or the HUD it is not drawn,
+        // the nearest ground above or below it in the same column stands in
+        int gy = -1;
+        for (int k = 0; k <= 32 && gy < 0; k++) {
+          for (int sgn = -1; sgn <= 1; sgn += 2) {
+            int y = iy + sgn * k;
+            if (y >= 0 && y < height && !HdFx_IsHudOrSprite(src[y * width + px])) {
+              gy = y;
+              break;
+            }
+          }
+        }
+        if (gy >= 0)
+          c = src[gy * width + px];
+      }
+      row[px] = c;
+      if (HdFx_IsHudOrSprite(c))
+        continue;
+      // the ripple of light, lit from the top left, and the fast thin ring
+      float v = 0;
+      if (amp > 0 && d > 1) {
+        float iso, dir;
+        ChargedRipple(d - crest, &iso, &dir);
+        v = amp * (iso + dir * (dx + dy) * 0.70710678f / d);
+      }
+      if (fast_v > 0) {
+        float e = (d - fast_r) / 2.5f;
+        if (e > -4 && e < 4)
+          v += fast_v * expf(-0.5f * e * e);
+      }
+      if (v > 0.5f || v < -0.5f)
+        c = AddBrightness(c, v);
+      float a = 0;
+      if (puff_a > 0 && d < 40)
+        a += puff_a * expf(-(d / 14) * (d / 14));
+      if (a > 0.003f)
+        c = HdFx_MixRgb(c, 255, 255, 255, a > 1 ? 1 : a);
+      if (flash_a > 0 && d < 60)
+        c = HdFx_MixRgb(c, 255, 250, 225, flash_a * expf(-(d / 18) * (d / 18)));
+      row[px] = c;
+    }
+  }
+}
+
+void HdFx_HammerWave(int wx, int wy, bool charged) {
   HammerWave *w = &g_hammer_wave[0];
   for (int i = 0; i < kHammerWaves; i++) {
     HammerWave *t = &g_hammer_wave[i];
@@ -402,6 +678,7 @@ void HdFx_HammerWave(int wx, int wy) {
   w->x = (int16)wx, w->y = (int16)wy;
   w->age = 0;
   w->on = true;
+  w->charged = charged;
 }
 
 // Drawn after the HD water, the fog and the other HD effects (zelda_rtl.c):
@@ -418,26 +695,44 @@ void HdFx_HammerWaves(uint8 *pixels, int pitch, int width, int height, int bias_
   static uint32 src[kHammerWaveBox * kHammerWaveBox];
   int ext = (width - 256) / 2;
   int cam_x = BG2HOFS_copy2 + bias_x, cam_y = BG2VOFS_copy2 + bias_y;
+  FindBlasts(cam_x, cam_y, ext);
   for (int i = 0; i < kHammerWaves; i++) {
     HammerWave *w = &g_hammer_wave[i];
-    if (w->on && step && ++w->age >= kHammerPuffLife)
+    if (w->on && step && ++w->age >= (w->charged ? kChargedLife : kHammerPuffLife))
       w->on = false;
     if (!w->on)
       continue;
+    if (w->charged) {
+      // the whole picture: a copy of it as large as it is
+      static uint32 *full;
+      static int full_size;
+      if (full_size < width * height) {
+        free(full);
+        full = (uint32 *)malloc((size_t)width * height * 4);
+        full_size = full ? width * height : 0;
+      }
+      if (full)
+        DrawChargedBlow(w, full, pixels, pitch, width, height,
+                        (float)(w->x - cam_x + ext), (float)(w->y - cam_y));
+      continue;
+    }
     int t = w->age - 1;  // 0 in the first frame drawn
     // ground drop: 6.5 pixels, 3.5 after 5 frames, gone after 6
     float drop = t < kHammerJoltLife ? 6.5f - 3.0f * t / (kHammerJoltLife - 1) : 0;
-    // veil
-    float u = (float)w->age / kHammerWaveLife, v = 1 - u;
-    bool veil = u < 1;
-    float r = veil ? kHammerWaveRadius * (1 - v * v) : 0;
-    float veil_a = veil ? 0.16f * (v < 0.8f ? v / 0.8f : 1) : 0;
+    // first a small bright disc, then a thin ring running out (measured on FSA)
+    float ft = (float)t;
+    bool disc = ft < kHammerDiscLife;
+    float ring_r = 0, ring_a = 0, ring_w = 1;
+    bool ring = PlainRing(ft, &ring_r, &ring_a, &ring_w);
+    float ring_s = ring_w / 2.355f;
     // cloud on the hit
     float puff_a = t < kHammerPuffHold ? 0.3f :
         0.3f * (float)(kHammerPuffLife - 1 - t) / (kHammerPuffLife - 1 - kHammerPuffHold);
     float reach = 14;
-    if (veil && r + 4 > reach)
-      reach = r + 4;
+    if (disc)
+      reach = kHammerDiscRadius + 4;
+    if (ring && ring_r + 3 * ring_s + 2 > reach)
+      reach = ring_r + 3 * ring_s + 2;
     if (drop > 0)
       reach = kHammerJoltReach + 8;
     float cx = (float)(w->x - cam_x + ext), cy = (float)(w->y - cam_y);
@@ -464,8 +759,8 @@ void HdFx_HammerWaves(uint8 *pixels, int pitch, int width, int height, int bias_
         if (px < 0 || px >= width)
           continue;
         uint32 c = src[y * bw + x];
-        if ((c >> 24) == 2)
-          continue;  // the HUD stays
+        if ((c >> 24) == 2 || IsBlastPixel(c, px, py))
+          continue;  // the HUD and the explosions stay
         float dx = px + 0.5f - cx, dy = py + 0.5f - cy;
         float d = sqrtf(dx * dx + dy * dy);
         // the ground moved down, with whatever stands on it: read it higher
@@ -475,19 +770,25 @@ void HdFx_HammerWaves(uint8 *pixels, int pitch, int width, int height, int bias_
           int iy = y - (int)(shift + 0.5f);
           if (iy != y) {
             uint32 s = iy >= 0 ? src[iy * bw + x] : 0x02000000;
-            if ((s >> 24) != 2)
+            if ((s >> 24) != 2 && !IsBlastPixel(s, px, y0 + iy))
               c = s;
           }
         }
         row[px] = c;
         if (HdFx_IsHudOrSprite(c))
-          continue;  // the veil and the cloud only on the ground
-        // veil: brighter towards the rim, soft outside it
+          continue;  // the disc, the ring and the cloud only on the ground
+        // disc: brighter towards its edge, soft outside it
         float a = 0;
-        if (veil) {
-          float e = d - r;
+        if (disc) {
+          float e = d - kHammerDiscRadius;
           if (e < 3)
-            a = veil_a * (e >= 0 ? 1 - e / 3 : HdFx_Smooth(0.45f * r, r, d));
+            a = kHammerDiscAlpha * (e >= 0 ? 1 - e / 3 :
+                HdFx_Smooth(0.3f * kHammerDiscRadius, kHammerDiscRadius, d));
+        }
+        if (ring && ring_a > 0.003f) {
+          float e = (d - ring_r) / ring_s;
+          if (e > -3 && e < 3)
+            a += ring_a * expf(-0.5f * e * e);
         }
         // cloud on the hit
         if (puff_a > 0 && d < 20)
@@ -515,7 +816,7 @@ void HdFx_BeforeLight(uint8 *pixels, int pitch, int width, int height, int bias_
 typedef struct Particle {
   float x, y, vx, vy;
   uint16 age, life;
-  uint8 kind;  // 0 = brace, 1 = pulviscolo, 2 = spruzzo di pioggia, 3 = fumo dell'incendio, 4 = bagliore di un vortice, 5 = scintilla di un portale
+  uint8 kind;  // 0 = brace, 1 = pulviscolo, 2 = spruzzo di pioggia, 3 = fumo dell'incendio, 4 = bagliore di un vortice, 5 = scintilla di un portale, 6 = bomb fuse smoke puff, 7 = bomb fuse spark
   int8 dir;    // brace di una torcia: a sinistra (-1) o a destra (1) dalle pareti laterali, in basso (2) dalla parete sud
 } Particle;
 
@@ -540,8 +841,10 @@ static void UpdateParticles() {
     p->x += p->vx, p->y += p->vy;
     if (p->kind == 0 && (p->dir == -1 || p->dir == 1))
       p->vy += (Rand01() - 0.5f) * 0.06f;  // di lato ondeggiano in su e in giu'
-    else if (p->kind == 0 || p->kind == 4 || p->kind == 5)
+    else if (p->kind == 0 || p->kind == 4 || p->kind == 5 || p->kind == 6)
       p->vx += (Rand01() - 0.5f) * 0.06f;  // le braci ondeggiano salendo
+    else if (p->kind == 7)
+      p->vx *= 0.85f, p->vy *= 0.85f;  // fuse sparks slow down quickly
     else if (p->kind == 1)
       p->vx += (Rand01() - 0.5f) * 0.01f, p->vy += (Rand01() - 0.5f) * 0.01f;
     g_particles[n++] = *p;
@@ -566,11 +869,207 @@ static void DrawSpark(uint32 *c, int pitch, float a, float r, float g, float b, 
   MarkSharp(c), MarkSharp(c - 1), MarkSharp(c + 1), MarkSharp(up), MarkSharp(dn);
 }
 
+// Bomb fuse smoke (Items as in FSA): measured on FSA, our own shape. A puff
+// is born small on the fuse tip and grows while it rises about 17 pixels:
+// light grey inside, a white rim and a white curl in its upper half, fading
+// in quickly and out over the last third of its life (k 0-1). The puffs are
+// painted on their own canvas and laid on the screen once at kFuseSmokeAlpha,
+// so where they overlap the smoke stays just as transparent
+enum { kFusePuffEvery = 4, kFusePuffLife = 32 };
+static const float kFuseSmokeAlpha = 0.5f;
+
+typedef struct SmokeCanvas {
+  uint32 *col;  // colour, bit 24 = sharp line
+  uint8 *a;     // coverage 0-255
+  int size, w, h, x0, y0, x1, y1;
+} SmokeCanvas;
+static SmokeCanvas g_smoke;
+
+static void SmokePut(int qx, int qy, int r, int g, int b, float a, bool sharp) {
+  SmokeCanvas *s = &g_smoke;
+  int i = qy * s->w + qx;
+  uint8 na = (uint8)(a * 255.0f + 0.5f);
+  s->col[i] = (uint32)r << 16 | (uint32)g << 8 | (uint32)b | (sharp ? 1u << 24 : 0);
+  if (s->a[i] < na)
+    s->a[i] = na;
+  if (qx < s->x0) s->x0 = qx;
+  if (qy < s->y0) s->y0 = qy;
+  if (qx > s->x1) s->x1 = qx;
+  if (qy > s->y1) s->y1 = qy;
+}
+
+// pass 0 paints the fill, pass 1 the rim and the curl
+static void DrawFusePuff(int x, int y, float k, int pass) {
+  float a = k < 0.1f ? k / 0.1f : k > 0.6f ? (1.0f - k) / 0.4f : 1.0f;
+  float r = 1.6f + 2.6f * sqrtf(k);
+  // the curl: a ring of half the radius, a little left and down of the middle
+  float cx = -0.2f * r, cy = 0.15f * r, cr = 0.5f * r;
+  int ir = (int)ceilf(r);
+  for (int dy = -ir; dy <= ir; dy++) {
+    for (int dx = -ir; dx <= ir; dx++) {
+      float d = sqrtf((float)(dx * dx + dy * dy));
+      int qx = x + dx, qy = y + dy;
+      if (d > r || qx < 0 || qy < 0 || qx >= g_smoke.w || qy >= g_smoke.h)
+        continue;
+      float dc = sqrtf((dx - cx) * (dx - cx) + (dy - cy) * (dy - cy));
+      // lit from the top left: the lower right side of the puff is in shade
+      bool shade = dx + dy > 0.35f * r;
+      if (pass == 0) {
+        if (shade)
+          SmokePut(qx, qy, 182, 182, 184, a, false);
+        else
+          SmokePut(qx, qy, 222, 222, 220, a, false);
+      } else if (d > r - 1.0f) {
+        if (shade)
+          SmokePut(qx, qy, 128, 128, 134, a, true);
+        else
+          SmokePut(qx, qy, 252, 252, 250, a, true);
+      } else if (r >= 3.0f && fabsf(dc - cr) < 0.55f && dy - cy <= 0.5f) {
+        SmokePut(qx, qy, 250, 250, 248, a, true);
+      }
+    }
+  }
+}
+
+// Paints every puff on the canvas and lays it on the screen
+static void DrawFuseSmoke(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext) {
+  bool any = false;
+  for (int i = 0; i < g_num_particles && !any; i++)
+    any = g_particles[i].kind == 6;
+  if (!any)
+    return;
+  SmokeCanvas *s = &g_smoke;
+  if (s->size < width * height) {
+    free(s->col), free(s->a);
+    s->size = width * height;
+    s->col = (uint32 *)malloc(s->size * sizeof(uint32));
+    s->a = (uint8 *)calloc(s->size, 1);
+    if (!s->col || !s->a) {
+      free(s->col), free(s->a);
+      memset(s, 0, sizeof(*s));
+      return;
+    }
+  }
+  s->w = width, s->h = height;
+  s->x0 = width, s->y0 = height, s->x1 = -1, s->y1 = -1;
+  // all the fills and then all the lines: every puff keeps its outline
+  // inside the column
+  for (int pass = 0; pass < 2; pass++) {
+    for (int i = 0; i < g_num_particles; i++) {
+      Particle *p = &g_particles[i];
+      if (p->kind == 6)
+        DrawFusePuff((int)floorf(p->x - cam_x + ext + 0.5f), (int)floorf(p->y - cam_y + 0.5f),
+                     (float)p->age / p->life, pass);
+    }
+  }
+  for (int y = s->y0; y <= s->y1; y++) {
+    uint32 *row = (uint32 *)(pixels + y * pitch);
+    for (int x = s->x0; x <= s->x1; x++) {
+      int i = y * width + x;
+      if (!s->a[i])
+        continue;
+      uint32 c = s->col[i];
+      float a = s->a[i] * (kFuseSmokeAlpha / 255.0f);
+      s->a[i] = 0;
+      if (IsHud(row[x]))
+        continue;
+      MixPixel(&row[x], c >> 16 & 255, c >> 8 & 255, c & 255, a);
+      if (c >> 24)
+        MarkSharp(&row[x]);
+    }
+  }
+}
+
+// Once per game frame: every bomb of Link with a burning fuse (also carried
+// or thrown) sends up a puff every kFusePuffEvery frames and a few sparks.
+// The fuse bends to the right: its tip is 6 pixels right of and 6 up from
+// the bomb's point (Bomb_Draw, sprite pixels measured with ztest)
+static void SpawnFuseSmoke(void) {
+  if (submodule_index)
+    return;
+  for (int k = 0; k < kAncilla_Slots; k++) {
+    if (ancilla_type[k] != 7 || ancilla_item_to_link[k] != 0)
+      continue;
+    int z = (int8)ancilla_z[k];
+    if (z == -1)
+      z = 0;
+    if (z == 0 && ancilla_tile_attr[k] == 9)
+      continue;  // in deep water the fuse is out
+    float tx = (float)(ancilla_x_hi[k] << 8 | ancilla_x_lo[k]) + 6;
+    float ty = (float)(ancilla_y_hi[k] << 8 | ancilla_y_lo[k]) - z - 6;
+    if ((frame_counter + k) % kFusePuffEvery == 0) {
+      Particle *p = NewParticle();
+      if (!p)
+        return;
+      p->kind = 6;
+      p->life = kFusePuffLife;
+      p->x = tx + (Rand01() - 0.5f), p->y = ty;
+      p->vx = (Rand01() - 0.5f) * 0.2f;
+      p->vy = -0.48f - Rand01() * 0.1f;
+    }
+    for (int i = 0; i < 2; i++) {
+      Particle *p = NewParticle();
+      if (!p)
+        return;
+      float ang = Rand01() * 6.2832f, sp = 0.3f + Rand01() * 0.4f;
+      p->kind = 7;
+      p->life = 5 + (int)(Rand01() * 5);
+      p->x = tx, p->y = ty;
+      p->vx = cosf(ang) * sp, p->vy = sinf(ang) * sp - 0.1f;
+    }
+  }
+}
+
+// Light blue pixel of a rain splash (a: 0-1) on screen pixel x, y
+static void SplashPixel(uint8 *pixels, int pitch, int width, int height, int x, int y, float a) {
+  if (x < 0 || y < 0 || x >= width || y >= height || a <= 0)
+    return;
+  uint32 *q = (uint32 *)(pixels + y * pitch) + x;
+  if (IsHud(*q))
+    return;
+  *q = HdFx_MixRgb(*q, 205, 225, 250, a);
+  MarkSharp(q);
+}
+
+// A drop hitting the ground (k: 0-1 of its life), seen from above: a bright
+// point of impact, then a crown ring (flattened by the view) that widens and
+// fades, and two droplets that jump out to the sides and fall back
+static void DrawRainSplash(uint8 *pixels, int pitch, int width, int height, int x, int y, float k) {
+  if (k < 0.25f) {
+    float a = 0.75f * (1.0f - k / 0.25f);
+    SplashPixel(pixels, pitch, width, height, x, y, a);
+    SplashPixel(pixels, pitch, width, height, x, y - 1, a * 0.6f);
+  }
+  if (k >= 0.1f) {
+    float t = (k - 0.1f) / 0.9f;
+    float rx = 1.2f + 3.8f * t, ry = rx * 0.45f, a = 0.75f * (1.0f - t);
+    int lx = -100, ly = -100;
+    for (int i = 0; i < 20; i++) {
+      float ang = i * (6.2831853f / 20);
+      int px = x + (int)floorf(cosf(ang) * rx + 0.5f), py = y + (int)floorf(sinf(ang) * ry + 0.5f);
+      if (px == lx && py == ly)
+        continue;
+      lx = px, ly = py;
+      // the far side of the ring catches less light
+      SplashPixel(pixels, pitch, width, height, px, py, sinf(ang) < 0 ? a * 0.6f : a);
+    }
+  }
+  if (k >= 0.1f && k < 0.7f) {
+    float t = (k - 0.1f) / 0.6f;
+    int dx = (int)floorf(1.5f + 3.0f * t + 0.5f), dy = (int)floorf(-4.0f * t * (1.0f - t) * 3.0f + 0.5f);
+    float a = 0.75f * (1.0f - t);
+    SplashPixel(pixels, pitch, width, height, x - dx, y + dy - 1, a);
+    SplashPixel(pixels, pitch, width, height, x + dx, y + dy - 1, a);
+  }
+}
+
 static void DrawParticles(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext) {
+  // fuse smoke first: the sparks stay in front
+  DrawFuseSmoke(pixels, pitch, width, height, cam_x, cam_y, ext);
   for (int i = 0; i < g_num_particles; i++) {
     Particle *p = &g_particles[i];
     int x = (int)floorf(p->x - cam_x + ext + 0.5f), y = (int)floorf(p->y - cam_y + 0.5f);
-    if (x < 1 || y < 1 || x >= width - 1 || y >= height - 1)
+    if (p->kind == 6 || x < 1 || y < 1 || x >= width - 1 || y >= height - 1)
       continue;
     // le fasce nere fuori dalla stanza si ripuliscono dopo (ClearHiddenBands)
     float k = (float)p->age / p->life;
@@ -587,6 +1086,9 @@ static void DrawParticles(uint8 *pixels, int pitch, int width, int height, int c
     } else if (p->kind == 5) {
       // portal spark: warm white core, golden halo
       DrawSpark(c, pitch, FadeInOut(k), 255, 252, 235, 255, 215 - 30 * k, 120 - 40 * k);
+    } else if (p->kind == 7) {
+      // fuse spark: yellow turning orange, a tiny halo
+      DrawSpark(c, pitch, (1.0f - k) * 0.9f, 255, 240 - 90 * k, 140 - 110 * k, 255, 150 - 60 * k, 30);
     } else if (p->kind == 1) {
       // pulviscolo nella luce: compare e scompare lentamente
       float a = sinf(k * 3.14159f) * 0.45f;
@@ -609,12 +1111,7 @@ static void DrawParticles(uint8 *pixels, int pitch, int width, int height, int c
         }
       }
     } else {
-      // spruzzo di pioggia: piccola croce che svanisce
-      float a = (1.0f - k) * 0.45f;
-      AddColor(c - 1, 190, 210, 255, a);
-      AddColor(c + 1, 190, 210, 255, a);
-      AddColor((uint32 *)((uint8 *)c - pitch), 190, 210, 255, a * 0.7f);
-      MarkSharp(c - 1), MarkSharp(c + 1);
+      DrawRainSplash(pixels, pitch, width, height, x, y, k);
     }
   }
 }
@@ -1179,6 +1676,7 @@ static void KeepCrystalUnpainted(uint8 *pixels, int pitch, int width, int height
 
 typedef struct RainDrop {
   float x, y, speed, len;
+  float land;  // screen y where the drop hits the ground (splash)
 } RainDrop;
 
 enum { kNumDrops = 220 };
@@ -1349,6 +1847,12 @@ bool HdFx_LiveOverworld(void) {
   return main_module_index == 9 && submodule_index == 0;
 }
 
+// The game running outdoors, in an area of the world or in a special outdoor
+// area (module 11: Zora's waterfall, the Master Sword's wood...)
+bool HdFx_LiveOutdoors(void) {
+  return (main_module_index == 9 || main_module_index == 11) && submodule_index == 0;
+}
+
 bool HdFx_GameLoaded(void) {
   return main_module_index > 5 && main_module_index != 20;
 }
@@ -1456,7 +1960,7 @@ void HdFx_MarkWater(uint8 *pixels, int pitch, int width, int height, int bias_x,
         water |= tub;
         // acqua congelata (hd_burn.c): per il gioco e' ghiaccio (0x0f), ma sotto
         // le lastre (HdFx_FrozenWater) si disegna l'acqua
-        if (attr == 0x0f && mod == 9 && HdBurn_IsFrozenAt((uint16)wx, (uint16)wy))
+        if (attr == 0x0f && HdFx_OutdoorScene(mod) && HdBurn_IsFrozenAt((uint16)wx, (uint16)wy))
           water = true;
         if (!water && !cloud_e)
           continue;
@@ -1494,7 +1998,7 @@ float HdFx_LightningWhite(void) {
 
 // All'aperto con il sole: niente pioggia, niente nebbia del Bosco Perduto
 // o della Foresta Maledetta, niente nuvole del Monte della Morte (chiaro e
-// oscuro), niente aree speciali come il bosco della Spada Suprema.
+// oscuro); delle aree speciali solo la Spada Suprema e la cascata di Zora.
 bool HdFx_SunnyOutdoors(void) {
   int mod;
   // Anche mentre si carica l'esterno e il cerchio si apre o si chiude
@@ -1506,13 +2010,16 @@ bool HdFx_SunnyOutdoors(void) {
   bool flute = main_module_index == 14 && submodule_index == 10 && HdFx_SceneModule() == 9;
   if (iris || flute)
     mod = 9;
-  else if (!HdFx_InGameplay(&mod) || mod != 9)
+  else if (!HdFx_InGameplay(&mod) || !HdFx_OutdoorScene(mod))
     return false;
   if (IsRaining(mod))
     return false;
   int si = BYTE(overworld_screen_index);
+  // Special areas: the Master Sword's wood and Zora's waterfall are in the
+  // open (in the sun once it no longer rains in the Light World); not under
+  // the bridge (also area 0x80, entered from 0x2d: its view starts at x 0x100)
   if (si >= 0x80)
-    return false;
+    return sram_progress_indicator >= 2 && !(si == 0x80 && ow_scroll_vars0.xstart == 0x100);
   switch (si) {
   case 0x00: case 0x03: case 0x05: case 0x07:
   case 0x40: case 0x43: case 0x45: case 0x47:
@@ -1525,8 +2032,10 @@ static void ApplyRain(uint8 *pixels, int pitch, int width, int height, int cam_x
                       bool step) {
   if (!g_drops_init) {
     for (int i = 0; i < kNumDrops; i++) {
-      g_drops[i].x = Rand01() * width, g_drops[i].y = Rand01() * height;
-      g_drops[i].speed = 4.5f + Rand01() * 2.5f, g_drops[i].len = 6 + Rand01() * 5;
+      RainDrop *d = &g_drops[i];
+      d->land = Rand01() * height, d->y = d->land * Rand01();
+      d->x = Rand01() * width + (d->land - d->y) * 0.35f;
+      d->speed = 4.5f + Rand01() * 2.5f, d->len = 6 + Rand01() * 5;
     }
     g_drops_init = true;
   }
@@ -1534,17 +2043,20 @@ static void ApplyRain(uint8 *pixels, int pitch, int width, int height, int cam_x
     RainDrop *d = &g_drops[i];
     if (step) {
       d->y += d->speed, d->x -= d->speed * 0.35f;
-      // la goccia tocca terra in un punto a caso: spruzzo
-      if (d->y > height || Rand01() < 0.012f) {
-        if (d->y <= height) {
-          Particle *p = NewParticle();
-          if (p) {
-            p->kind = 2;
-            p->x = d->x - ext + cam_x, p->y = d->y + cam_y;
-            p->life = 6;
-          }
+      // every drop falls to its own point of the ground and splashes there,
+      // where its head touches it; then it starts again from the top
+      if (d->y >= d->land) {
+        float over = d->y - d->land;
+        Particle *p = NewParticle();
+        if (p) {
+          p->kind = 2;
+          p->x = d->x + over * 0.35f - ext + cam_x, p->y = d->land + cam_y;
+          p->life = 14;
         }
-        d->y = -Rand01() * 20, d->x = Rand01() * (width + 40);
+        // the point of the ground is chosen first, even over the whole
+        // screen; the drop starts above it, to the right by its slant
+        d->y = -Rand01() * 20, d->land = Rand01() * height;
+        d->x = Rand01() * width + (d->land - d->y) * 0.35f;
       }
     }
     for (int j = 0; j < (int)d->len; j++) {
@@ -1594,6 +2106,52 @@ void HdFx_Lightning(uint8 *pixels, int pitch, int width, int height) {
       row[x] = HdFx_MixRgb(row[x], 235, 240, 255, g_flash * 0.40f);
     }
   }
+}
+
+// Improved rain replaces the game's drops. The game's rain layer (overlay
+// 0x9f on BG1 of the sub screen) is dark grey (colour 1) with drops and
+// splashes drawn in colours 2-4; half added to the scene it darkens the storm
+// (and added in full it makes the lightning). While the PPU draws and the
+// continuous world composites the layer (HdWorld_Composite reads it from
+// VRAM), every drawn pixel of its tiles becomes colour 1: the storm stays as
+// dark and the flashes as bright, only our drops fall (ApplyRain).
+enum { kRainMaxChars = 64 };
+static uint16 g_rain_chr[kRainMaxChars], g_rain_saved[kRainMaxChars][16];
+static int g_rain_num_chr;
+
+void HdFx_RainBeforeRender(Ppu *ppu) {
+  g_rain_num_chr = 0;
+  int mod;
+  if (!g_config.fx_rain || BYTE(overlay_index) != 0x9f || !(ppu->screenEnabled[1] & 1) ||
+      !HdFx_InGameplay(&mod) || !IsRaining(mod))
+    return;
+  const BgLayer *bg = &ppu->bgLayer[0];
+  int n = 1024 << bg->tilemapWider << bg->tilemapHigher;
+  static uint8 seen[1024 / 8];
+  memset(seen, 0, sizeof(seen));
+  for (int i = 0; i < n && g_rain_num_chr < kRainMaxChars; i++) {
+    int chr = ppu->vram[(bg->tilemapAdr + i) & 0x7fff] & 0x3ff;
+    if (seen[chr >> 3] & (1 << (chr & 7)))
+      continue;
+    seen[chr >> 3] |= 1 << (chr & 7);
+    int adr = (bg->tileAdr + chr * 16) & 0x7fff;
+    if (adr + 16 > 0x8000)
+      continue;
+    uint16 *t = &ppu->vram[adr];
+    g_rain_chr[g_rain_num_chr] = (uint16)adr;
+    memcpy(g_rain_saved[g_rain_num_chr++], t, 32);
+    for (int r = 0; r < 8; r++) {
+      // planes 0-1 in the first 8 words, 2-3 in the next 8
+      int drawn = (t[r] | t[r] >> 8 | t[r + 8] | t[r + 8] >> 8) & 0xff;
+      t[r] = (uint16)drawn, t[r + 8] = 0;
+    }
+  }
+}
+
+void HdFx_RainAfterComposite(Ppu *ppu) {
+  for (int i = 0; i < g_rain_num_chr; i++)
+    memcpy(&ppu->vram[g_rain_chr[i]], g_rain_saved[i], 32);
+  g_rain_num_chr = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1782,100 +2340,238 @@ static float IceNoise(int wx, int wy, int scale, uint32 salt) {
   return ValueNoise(gx, gy, (float)(wx - gx * scale) / scale, (float)(wy - gy * scale) / scale, salt);
 }
 
-// Una tile d'acqua ghiacciata: lastra azzurra quasi bianca (una per tile),
-// con velature leggere, qualche crepa sottile, il bordo irregolare con un filo
-// di brina; negli ultimi kHdThawTime frame si apre a chiazze e torna acqua.
-// Il colore segue la luce del pixel d'acqua sotto (di notte e' piu' scuro)
-static void DrawIceWaterTile(uint8 *pixels, int pitch, int width, int height, int sx, int sy,
-                             const HdBurnTile *f) {
-  static const float kDeep[3] = { 120, 168, 214 }, kLight[3] = { 222, 240, 252 };
-  uint8 cells = HdBurn_WaterCells(f->x, f->y);
-  float grow = IceGrow(f);
+// The game's own ice floor tile of Ganon's Tower (room 0x4c, chars 0x1ba-0x1bd,
+// in the dungeon's animated tiles at VRAM 0x3b00): chars 10-13 of background
+// sheet 0x5e (kDungAnimatedTiles of tile theme 0x0e; 3bpp, low half: pixel =
+// colour 0-7) with palette row 7 of dungeon palette set 13
+// (palette_main_indoors 0x1a). Read once from the ROM's graphics, so no art
+// is stored in the source
+enum { kIceFloorSheet = 0x5e, kIceFloorChar = 10, kIceFloorPalSet = 13, kIceFloorPalRow = 7 };
+// colour index (0-7) of each pixel of the tile and the colours of the row
+static uint8 g_ice_floor[16 * 16];
+static uint32 g_ice_floor_pal[8];
+static bool g_ice_floor_ready;
+// colour indices of the tile: 2 dark outline, 4 light inner frame, 3 fill
+enum { kIceOutline = 2, kIceFill = 3, kIceFrame = 4 };
+
+static void BuildIceFloor(void) {
+  if (g_ice_floor_ready)
+    return;
+  static uint8 sheet[0x1000];
+  Decomp_bg(sheet, kIceFloorSheet);
+  // palette rows 2-7 of a set: 15 colours each, from colour 1
+  const uint16 *pal = kPalette_DungBgMain + kIceFloorPalSet * 90 + (kIceFloorPalRow - 2) * 15;
+  for (int v = 1; v < 8; v++)
+    g_ice_floor_pal[v] = HdFx_Bgr15ToRgb(pal[v - 1]);
+  for (int q = 0; q < 4; q++) {
+    // 3bpp char: planes 0-1 in 16 bytes, then plane 2 in 8
+    const uint8 *t = sheet + (kIceFloorChar + q) * 24;
+    for (int y = 0; y < 8; y++)
+      for (int x = 0; x < 8; x++) {
+        int b = 7 - x;
+        g_ice_floor[((q >> 1) * 8 + y) * 16 + (q & 1) * 8 + x] =
+            (t[y * 2] >> b & 1) | (t[y * 2 + 1] >> b & 1) << 1 | (t[16 + y] >> b & 1) << 2;
+      }
+  }
+  g_ice_floor_ready = true;
+}
+
+// Frozen water is drawn in two passes over a coverage map of the screen:
+// g_ice_cover = strength (0-255, 0 also in the holes of the thaw) and
+// g_ice_kind (0 = no ice; kIceKindTile:
+// the ice tile with its own frame, the Ice Rod's; kIceKindBlock: one block,
+// the tile without its frame, the Ether's and the shore). The outer edge of
+// the ice, wherever it meets water or land, gets the tile's frame (dark
+// outline, then the light line); the holes of the thaw have no frame
+enum { kIceKindTile = 1, kIceKindBlock = 2 };
+static uint8 *g_ice_cover, *g_ice_kind;
+static int g_ice_cover_size;
+
+// strength of the ice of tile f at world pixel (wx, wy): it grows in, and in
+// the last kHdThawTime frames opens up in patches that turn back to water
+static int IceStrength(const HdBurnTile *f, int wx, int wy) {
+  float a = IceGrow(f);
   int left = HdBurn_IceLeft(f);
   float rem = left <= 0 ? 0.0f : (float)left / HdBurn_ThawTime(f);
-  for (int c = 0; c < 4; c++) {
-    if (!(cells >> c & 1))
+  if (rem < 1.0f) {
+    float hole = IceNoise(wx, wy, 6, 0x3ce + f->seed);
+    float k = (rem * 1.15f - hole) / 0.12f;
+    a *= (k < 0 ? 0 : k > 1 ? 1 : k) * (0.6f + 0.4f * rem);
+  }
+  return a <= 0 ? 0 : a >= 1 ? 255 : (int)(a * 255 + 0.5f);
+}
+
+static void CoverIce(int i, int s, int kind) {
+  if (s > g_ice_cover[i])
+    g_ice_cover[i] = (uint8)s;
+  if (kind > g_ice_kind[i])
+    g_ice_kind[i] = (uint8)kind;
+}
+
+// Pixel of the background (layer 0 or 1) with one of the n colours
+static bool ShoreWaterColor(uint32 p, const uint32 *colors, int n) {
+  if ((p >> 24) > 1)
+    return false;
+  for (int k = 0; k < n; k++)
+    if (colors[k] == (p & 0xffffff))
+      return true;
+  return false;
+}
+
+// Marks tile f (at screen sx, sy) in the coverage map: its water cells, and
+// up to 8 px around it the pixels drawn as water in cells that are not water
+// for the game (the shore of the land tiles), so the ice reaches the land
+static void CoverIceTile(const uint8 *pixels, int pitch, int width, int height, int sx, int sy,
+                         const HdBurnTile *f) {
+  int kind = f->water == kHdIceRod ? kIceKindTile : kIceKindBlock;
+  // once per tile, not per pixel (the Ether freezes a whole screen): the
+  // water cells of the tile and of the 8 around it, and the waterfall cells
+  // of the 4x4 cells of 8 pixels the loop goes over
+  uint8 near_cells[3][3];
+  bool fall[4][4];
+  for (int j = 0; j < 3; j++)
+    for (int i = 0; i < 3; i++)
+      near_cells[j][i] = HdBurn_WaterCells((uint16)(f->x + (i - 1) * 16), (uint16)(f->y + (j - 1) * 16));
+  for (int j = 0; j < 4; j++)
+    for (int i = 0; i < 4; i++)
+      fall[j][i] = !player_is_indoors && HdWater_IsFallCellAt(f->x - 8 + i * 8, f->y - 8 + j * 8);
+  // the colours of the water in the water cells around (deep water too):
+  // without the HD water (FxWater off) nothing marks the water pixels of the
+  // shore cells as water (layer 7; the dark water under a cliff is wall for
+  // the game), so there a pixel of the background with one of these colours
+  // is water too and the ice reaches the shore as with the HD water
+  uint32 colors[16];
+  int n_colors = 0;
+  for (int y = -8; y < 24 && n_colors < 16; y++) {
+    int py = sy + y;
+    if (py < 0 || py >= height)
       continue;
-    int cx = (c & 1) * 8, cy = (c >> 1) * 8;
-    int wx0 = f->x + cx, wy0 = f->y + cy;
-    // lati della cella che non toccano un'altra cella d'acqua della stessa
-    // tile: ogni tile e' una lastra a se', col suo bordo
-    bool open_l = cx == 0 || !(cells >> (c - 1) & 1), open_r = cx == 8 || !(cells >> (c + 1) & 1);
-    bool open_u = cy == 0 || !(cells >> (c - 2) & 1), open_d = cy == 8 || !(cells >> (c + 2) & 1);
-    for (int y = 0; y < 8; y++) {
-      int py = sy + cy + y;
-      if (py < 0 || py >= height)
+    const uint32 *row = (const uint32 *)(pixels + py * pitch);
+    for (int x = -8; x < 24 && n_colors < 16; x++) {
+      int px = sx + x, cell = ((f->y + y) >> 3 & 1) * 2 + ((f->x + x) >> 3 & 1);
+      if (px < 0 || px >= width || !(near_cells[(y + 16) >> 4][(x + 16) >> 4] >> cell & 1) ||
+          ((row[px] >> 24) > 1 && (row[px] >> 24) != kLayerWater))
         continue;
-      uint32 *row = (uint32 *)(pixels + py * pitch);
-      for (int x = 0; x < 8; x++) {
-        int px = sx + cx + x;
-        if (px < 0 || px >= width || HdFx_IsHudOrSprite(row[px]))
-          continue;
-        int wx = wx0 + x, wy = wy0 + y;
-        // distanza dal bordo verso l'acqua, mossa dal rumore: bordo irregolare
-        float e = 9.0f;
-        if (open_l && x < e) e = (float)x;
-        if (open_r && 7 - x < e) e = (float)(7 - x);
-        if (open_u && y < e) e = (float)y;
-        if (open_d && 7 - y < e) e = (float)(7 - y);
-        if (e < 9.0f)
-          e += (IceNoise(wx, wy, 5, 0x5ce) - 0.5f) * 3.0f;
-        if (e < -0.5f)
-          continue;
-        float a = (e < 0.5f ? 0.45f : 0.88f) * grow;
-        if (rem < 1.0f) {
-          // disgelo: chiazze sempre piu' grandi tornano acqua
-          float hole = IceNoise(wx, wy, 6, 0x3ce + f->seed);
-          float k = (rem * 1.15f - hole) / 0.12f;
-          a *= (k < 0 ? 0 : k > 1 ? 1 : k) * (0.6f + 0.4f * rem);
-        }
-        if (a <= 0)
-          continue;
-        int l = HdFx_Luma(row[px]) / 10;
-        float lit = (l + 50) / 150.0f;
-        lit = lit < 0.3f ? 0.3f : lit > 1.05f ? 1.05f : lit;
-        // velature: ghiaccio piu' trasparente (piu' blu) e piu' opaco (piu' bianco)
-        float n = IceNoise(wx, wy, 13, 0x1ce) * 0.75f + IceNoise(wx, wy, 5, 0x2ce) * 0.25f;
-        float t = 0.35f + 0.45f * n;
-        float cr = IceNoise(wx + 37, wy + 11, 10, 0x4ce + f->seed);
-        if (cr > 0.493f && cr < 0.507f)
-          t = 0.95f;  // crepa
-        if (e < 1.5f)
-          t = 0.85f + 0.1f * t;  // brina sul bordo
-        float rgb[3];
-        for (int j = 0; j < 3; j++)
-          rgb[j] = (kDeep[j] + (kLight[j] - kDeep[j]) * t) * lit;
-        MixPixel(&row[px], (int)rgb[0], (int)rgb[1], (int)rgb[2], a);
-        if ((row[px] >> 24) == kLayerWater)
-          row[px] = (row[px] & 0x00ffffff) | 1u << 24;  // non piu' acqua per lo shader
-      }
+      uint32 c = row[px] & 0xffffff;
+      int k = 0;
+      while (k < n_colors && colors[k] != c)
+        k++;
+      if (k == n_colors)
+        colors[n_colors++] = c;
     }
   }
-  // luccichio, come sui cespugli congelati
-  int ph = (int)((g_fx_frames + f->seed * 7) % 128);
-  if (ph < 12 && rem >= 1.0f && (cells & 9) == 9)
-    DrawGlint(pixels, pitch, width, height, sx, sy, f->seed, ph, 0.9f, 0.5f);
+  for (int y = -8; y < 24; y++) {
+    int py = sy + y;
+    if (py < 0 || py >= height)
+      continue;
+    const uint32 *row = (const uint32 *)(pixels + py * pitch);
+    int wy = f->y + y;
+    for (int x = -8; x < 24; x++) {
+      int px = sx + x;
+      if (px < 0 || px >= width)
+        continue;
+      int wx = f->x + x;
+      bool inside = x >= 0 && x < 16 && y >= 0 && y < 16;
+      int cell = (wy >> 3 & 1) * 2 + (wx >> 3 & 1);
+      uint8 cells = near_cells[(y + 16) >> 4][(x + 16) >> 4];
+      if (cells >> cell & 1) {
+        if (!inside)
+          continue;  // water of another tile: frozen or not, it is its own
+      } else if ((row[px] >> 24) != kLayerWater && !ShoreWaterColor(row[px], colors, n_colors)) {
+        continue;  // land, or a sprite over the shore
+      } else if (fall[(y + 8) >> 3][(x + 8) >> 3]) {
+        continue;  // a waterfall, drawn as water: it never freezes
+      }
+      CoverIce(py * width + px, IceStrength(f, wx, wy), inside && (cells >> cell & 1) ? kind : kIceKindBlock);
+    }
+  }
+}
+
+static inline bool IceOutside(int width, int height, int px, int py) {
+  if (px < 0 || py < 0 || px >= width || py >= height)
+    return false;  // the edge of the screen is not an edge of the ice
+  return g_ice_kind[py * width + px] == 0;
 }
 
 void HdFx_FrozenWater(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y) {
-  if (HdFx_SceneModule() != 9)
+  // outdoors, and indoors in houses and caves (HdBurn_GetFrozen)
+  int scene = HdFx_SceneModule();
+  if (player_is_indoors ? scene != 7 : !HdFx_OutdoorScene(scene))
     return;
   const HdBurnTile *tiles;
   int n = HdBurn_GetFrozen(&tiles);
   if (n == 0)
     return;
+  BuildIceFloor();
+  int size = width * height;
+  if (size > g_ice_cover_size) {
+    uint8 *c = realloc(g_ice_cover, size), *k = realloc(g_ice_kind, size);
+    if (c)
+      g_ice_cover = c;
+    if (k)
+      g_ice_kind = k;
+    if (!c || !k)
+      return;
+    g_ice_cover_size = size;
+  }
+  memset(g_ice_cover, 0, size);
+  memset(g_ice_kind, 0, size);
   int ext = (width - 256) / 2;
   // (screen row 0 is background row 1, as in HdWorld_Composite)
   int cam_x = BG2HOFS_copy2 + bias_x, cam_y = BG2VOFS_copy2 + bias_y + 1;
+  bool any = false;
   for (int i = 0; i < n; i++) {
     const HdBurnTile *f = &tiles[i];
     if (!f->water || !HdBurn_TileShown(f))
       continue;
     int sx = f->x - cam_x + ext, sy = f->y - cam_y;
-    if (TileNearScreen(sx, sy, width, height))
-      DrawIceWaterTile(pixels, pitch, width, height, sx, sy, f);
+    if (sx > -28 && sy > -28 && sx < width + 12 && sy < height + 12) {
+      CoverIceTile(pixels, pitch, width, height, sx, sy, f);
+      any = true;
+    }
+  }
+  if (!any)
+    return;
+  static const int8 kNear[4][2] = { {-1, 0}, {1, 0}, {0, -1}, {0, 1} };
+  static const int8 kFar[8][2] = { {-2, 0}, {2, 0}, {0, -2}, {0, 2}, {-1, -1}, {1, -1}, {-1, 1}, {1, 1} };
+  for (int py = 0; py < height; py++) {
+    uint32 *row = (uint32 *)(pixels + py * pitch);
+    const uint8 *cover = g_ice_cover + py * width, *kind = g_ice_kind + py * width;
+    for (int px = 0; px < width; px++) {
+      if (!cover[px] || HdFx_IsHudOrSprite(row[px]))
+        continue;
+      int v = 0;
+      for (int j = 0; j < 4 && !v; j++)
+        if (IceOutside(width, height, px + kNear[j][0], py + kNear[j][1]))
+          v = kIceOutline;
+      for (int j = 0; j < 8 && !v; j++)
+        if (IceOutside(width, height, px + kFar[j][0], py + kFar[j][1]))
+          v = kIceFrame;
+      if (!v) {
+        int tx = (px - ext + cam_x) & 15, ty = (py + cam_y) & 15;
+        v = g_ice_floor[ty * 16 + tx];
+        // one block: the frame of the tile becomes fill
+        if (kind[px] == kIceKindBlock && (tx < 2 || tx > 13 || ty < 2 || ty > 13))
+          v = kIceFill;
+      }
+      uint32 ic = g_ice_floor_pal[v];
+      MixPixel(&row[px], ic >> 16 & 0xff, ic >> 8 & 0xff, ic & 0xff, cover[px] / 255.0f);
+      if ((row[px] >> 24) == kLayerWater)
+        row[px] = (row[px] & 0x00ffffff) | 1u << 24;  // non piu' acqua per lo shader
+    }
+  }
+  // luccichio, come sui cespugli congelati
+  for (int i = 0; i < n; i++) {
+    const HdBurnTile *f = &tiles[i];
+    if (!f->water || !HdBurn_TileShown(f) || HdBurn_IceLeft(f) < HdBurn_ThawTime(f))
+      continue;
+    int sx = f->x - cam_x + ext, sy = f->y - cam_y;
+    int ph = (int)((g_fx_frames + f->seed * 7) % 128);
+    if (ph < 12 && TileNearScreen(sx, sy, width, height) && (HdBurn_WaterCells(f->x, f->y) & 9) == 9)
+      DrawGlint(pixels, pitch, width, height, sx, sy, f->seed, ph, 0.9f, 0.5f);
   }
 }
+
 
 static void ApplyBurning(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext, bool step) {
   const HdBurnTile *tiles;
@@ -1893,10 +2589,10 @@ static void ApplyBurning(uint8 *pixels, int pitch, int width, int height, int ca
     }
   }
   n = HdBurn_GetScorched(&tiles);
-  bool live = HdFx_LiveOverworld();
+  bool live = HdFx_LiveOutdoors();
   for (int i = 0; i < n; i++) {
     const HdBurnTile *s = &tiles[i];
-    if (!HdBurn_TileShown(s))
+    if (!HdBurn_ScorchShown(s))
       continue;
     float k = (float)s->age / kHdScorchTime;
     int sx = s->x - cam_x + ext, sy = s->y - cam_y;
@@ -1965,6 +2661,8 @@ void HdFx_AfterLight(uint8 *pixels, int pitch, int width, int height, int bias_x
       SpawnEmbers(cam_x, cam_y, ext);
     if (g_config.fx_whirlpool && mod == 9)
       SpawnWhirlpoolSparkles();
+    if (g_config.fsa_items && (mod == 9 || mod == 7))
+      SpawnFuseSmoke();
     if (g_config.fx_heat && (mod == 9 || mod == 7))
       StepPortals(cam_x, cam_y + 1, ext, width, height);
     else
@@ -1978,7 +2676,7 @@ void HdFx_AfterLight(uint8 *pixels, int pitch, int width, int height, int bias_x
     ApplyItemGlow(pixels, pitch, width, height, cam_x, cam_y, ext);
   KeepCrystalUnpainted(pixels, pitch, width, height, cam_x, cam_y, ext);
   TrinexxBodyAsSprite(pixels, pitch, width, height);
-  if (mod == 9)
+  if (HdFx_OutdoorScene(mod))
     ApplyBurning(pixels, pitch, width, height, cam_x, cam_y + 1, ext, step);
   if (g_config.fx_heat && (mod == 9 || mod == 7))
     ApplyPortals(pixels, pitch, width, height, cam_x, cam_y + 1, ext);
@@ -2178,7 +2876,7 @@ void HdFx_Fog(uint8 *pixels, int pitch, int width, int height, int bias_x, int b
   // la nebbia si muove solo mentre si gioca (non nei menu)
   if (g_fog_last_frame != frame_counter) {
     g_fog_last_frame = frame_counter;
-    if (main_module_index == 9)
+    if (main_module_index == 9 || main_module_index == 11)
       g_fog_t++;
   }
   float t = (float)g_fog_t;
@@ -2696,6 +3394,47 @@ static uint32 ScaleUnderWhite(uint32 c, float k) {
   return (c & 0xff000000) | r << 16 | g << 8 | b;
 }
 
+// Pixels of the game's sprites and HUD (as the PPU and HdWorld_Composite drew
+// them), taken before the HD effects: the HD drops, splashes, embers and
+// sparks are marked sharp (MarkSharp) with the sprite layer, but unlike the
+// sprites the game's mosaic must break them up too
+static uint8 *g_mosaic_keep;
+static int g_mosaic_keep_size;
+static bool g_mosaic_keep_valid;
+
+static bool MosaicActive(void) {
+  Ppu *ppu = g_zenv.ppu;
+  return ppu->mosaicSize > 1 && (ppu->mosaicEnabled & 3);
+}
+
+void HdFx_MosaicBeforeEffects(uint8 *pixels, int pitch, int width, int height) {
+  g_mosaic_keep_valid = false;
+  if (!MosaicActive())
+    return;
+  if (g_mosaic_keep_size < width * height) {
+    uint8 *p = (uint8 *)realloc(g_mosaic_keep, width * height);
+    if (!p)
+      return;
+    g_mosaic_keep = p, g_mosaic_keep_size = width * height;
+  }
+  for (int y = 0; y < height; y++) {
+    const uint32 *row = (const uint32 *)(pixels + y * pitch);
+    uint8 *k = g_mosaic_keep + y * width;
+    for (int x = 0; x < width; x++)
+      k[x] = HdFx_IsHudOrSprite(row[x]);
+  }
+  g_mosaic_keep_valid = true;
+}
+
+// HUD or a sprite of the game (pixel x, y now c): not broken up by the mosaic
+static inline bool MosaicKeeps(uint32 c, int x, int y, int width) {
+  if (IsHud(c))
+    return true;
+  if (g_mosaic_keep_valid)
+    return g_mosaic_keep[y * width + x] != 0;
+  return HdFx_IsHudOrSprite(c);
+}
+
 void HdFx_Mosaic(uint8 *pixels, int pitch, int width, int height) {
   // mosaico del gioco (mulinello, specchio nei labirinti): la PPU sgrana gli
   // sfondi, ma acqua e luci HD sono disegnate dopo, pixel per pixel. Si
@@ -2703,8 +3442,10 @@ void HdFx_Mosaic(uint8 *pixels, int pitch, int width, int height) {
   // c'e' lo scatto all'immagine originale
   Ppu *ppu = g_zenv.ppu;
   int m = ppu->mosaicSize;
-  if (m <= 1 || !(ppu->mosaicEnabled & 3))
+  if (!MosaicActive()) {
+    g_mosaic_keep_valid = false;
     return;
+  }
   int ext = (width - 256) / 2;
   for (int y = 0; y < height; y++) {
     // riga della PPU: linea y + 1, che prende la linea (y + 1) - (y + 1) % m
@@ -2714,7 +3455,7 @@ void HdFx_Mosaic(uint8 *pixels, int pitch, int width, int height) {
     uint32 *row = (uint32 *)(pixels + y * pitch);
     const uint32 *src = (const uint32 *)(pixels + sy * pitch);
     for (int x = 0; x < width; x++) {
-      if (HdFx_IsHudOrSprite(row[x]))
+      if (MosaicKeeps(row[x], x, y, width))
         continue;  // HUD e sprite restano
       int sx = x - (((x - ext) % m + m) % m);
       if (sx < 0)
@@ -2722,7 +3463,7 @@ void HdFx_Mosaic(uint8 *pixels, int pitch, int width, int height) {
       if (sx == x && sy == y)
         continue;
       uint32 c = src[sx];
-      if (HdFx_IsHudOrSprite(c))
+      if (MosaicKeeps(c, sx, sy, width))
         continue;  // sotto uno sprite il colore del fondale non si sa
       row[x] = c;
     }
@@ -2857,22 +3598,15 @@ static int OamScreenY(Ppu *ppu, int i, int bottom) {
   return sy - ppu->objBiasY;
 }
 
-void HdFx_ShadowsBeforeRender(Ppu *ppu, int width, int height) {
+// The soft shadow rule for the OAM entries of ppu, from the sprites now in RAM:
+// cast[i] = entry i casts the soft shadow, hide[i] = entry i is the game's
+// shadow of an enemy on the ground (it goes). owner = enemy of each entry
+// (0xff none), link = Link's entries (NULL: no Link, a neighbour area's
+// copy). False when the soft shadows are off
+bool HdFx_ShadowMarks(Ppu *ppu, int height, const uint8 *owner, const uint8 *link, uint8 *cast, bool *hide) {
   int mod;
-  ppu->objShadowOut = NULL;
-  g_num_hidden = 0;
-  g_shadow_src_valid = false;
   if (!g_config.fx_sprite_shadows || !HdFx_InGameplay(&mod) || ppu->mode == 7)
-    return;
-  int n = width * height;
-  if (n > g_shadow_src_cap) {
-    free(g_shadow_src);
-    g_shadow_src = malloc(n);
-    g_shadow_src_cap = g_shadow_src ? n : 0;
-    if (!g_shadow_src)
-      return;
-  }
-  memset(g_shadow_src, 0, n);
+    return false;
   bool link_on_ground = (int16)link_z_coord <= 0;
   // Per ogni nemico: dov'e' la sua ombra del gioco e dove finisce il corpo.
   // Un nemico che cammina e' a terra se non e' in aria (sprite_z) e, quando
@@ -2883,8 +3617,8 @@ void HdFx_ShadowsBeforeRender(Ppu *ppu, int width, int height) {
   for (int k = 0; k < 16; k++)
     shadow_top[k] = 1 << 20, body_bottom[k] = -(1 << 20);
   for (int i = 0; i < 128; i++) {
-    int o = g_sprite_oam_owner[i];
-    if (o >= 16 || g_link_oam_mask[i] || (ppu->oam[i * 2] >> 8) == 0xf0)
+    int o = owner[i];
+    if (o >= 16 || (link && link[i]) || (ppu->oam[i * 2] >> 8) == 0xf0)
       continue;
     int y = OamScreenY(ppu, i, bottom);
     int size = (ppu->oam[0x100 + (i >> 3)] >> ((i & 7) * 2) & 2) ? 16 : 8;
@@ -2902,22 +3636,64 @@ void HdFx_ShadowsBeforeRender(Ppu *ppu, int width, int height) {
                 (shadow_top[k] == (1 << 20) || shadow_top[k] <= body_bottom[k] + 2);
   for (int i = 0; i < 128; i++) {
     bool shadow = IsGameShadowTile(ppu->oam[i * 2 + 1]);
-    int o = g_sprite_oam_owner[i];
-    uint8 cast = 0;
-    if (g_link_oam_mask[i]) {
-      cast = !shadow && link_on_ground && !(g_link_dive_timer && player_is_indoors);  // sott'acqua al chiuso niente ombra, come su GBA
+    int o = owner[i];
+    cast[i] = 0, hide[i] = false;
+    if (link && link[i]) {
+      cast[i] = !shadow && link_on_ground && !(g_link_dive_timer && player_is_indoors);  // sott'acqua al chiuso niente ombra, come su GBA
     } else if (o < 16 && ground[o]) {
-      if (shadow) {
-        g_hidden_idx[g_num_hidden] = i;
-        g_hidden_oam[g_num_hidden++] = ppu->oam[i * 2];
-        ppu->oam[i * 2] = (ppu->oam[i * 2] & 0xff) | 0xf000;  // y = 0xF0: non si disegna
-        ppu->objShowF0[i] = 0;
-      } else {
-        cast = 1;
-      }
+      if (shadow)
+        hide[i] = true;
+      else
+        cast[i] = 1;
     }
-    ppu->objCastShadow[i] = cast;
   }
+  return true;
+}
+
+// Hides the game's shadow entries marked by HdFx_ShadowMarks (y = 0xF0, not
+// drawn); HdFx_ShowHiddenShadows puts them back after the drawing
+int HdFx_HideShadows(Ppu *ppu, const bool *hide, uint8 *idx, uint16 *saved) {
+  int n = 0;
+  for (int i = 0; i < 128; i++)
+    if (hide[i]) {
+      idx[n] = i, saved[n++] = ppu->oam[i * 2];
+      ppu->oam[i * 2] = (ppu->oam[i * 2] & 0xff) | 0xf000;
+      ppu->objShowF0[i] = 0;
+    }
+  return n;
+}
+
+void HdFx_ShowHiddenShadows(Ppu *ppu, const uint8 *idx, const uint16 *saved, int n) {
+  for (int j = 0; j < n; j++)
+    ppu->oam[idx[j] * 2] = saved[j];
+}
+
+// The map of the pixels that cast a soft shadow in this frame (the frame's
+// width), NULL without soft shadows: the sprites of the neighbour areas,
+// drawn apart, add theirs (hd_world.c)
+uint8 *HdFx_ShadowSource(void) {
+  return g_shadow_src_valid ? g_shadow_src : NULL;
+}
+
+void HdFx_ShadowsBeforeRender(Ppu *ppu, int width, int height) {
+  ppu->objShadowOut = NULL;
+  g_num_hidden = 0;
+  g_shadow_src_valid = false;
+  bool hide[128];
+  if (!HdFx_ShadowMarks(ppu, height, g_sprite_oam_owner, g_link_oam_mask, ppu->objCastShadow, hide))
+    return;
+  int n = width * height;
+  if (n > g_shadow_src_cap) {
+    free(g_shadow_src);
+    g_shadow_src = malloc(n);
+    g_shadow_src_cap = g_shadow_src ? n : 0;
+    if (!g_shadow_src) {
+      memset(ppu->objCastShadow, 0, sizeof(ppu->objCastShadow));
+      return;
+    }
+  }
+  memset(g_shadow_src, 0, n);
+  g_num_hidden = HdFx_HideShadows(ppu, hide, g_hidden_idx, g_hidden_oam);
   ppu->objShadowOut = g_shadow_src;
   ppu->objShadowStride = width;
 }

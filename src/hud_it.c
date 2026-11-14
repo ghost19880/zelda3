@@ -18,8 +18,8 @@
 enum {
   kTileBase = 0x180,       // prima casella usata (testo dei dialoghi)
   kTileItemName = kTileBase,         // 16 caselle: nome dell'oggetto
-  kTileLabels = kTileBase + 16,      // intestazioni, una dopo l'altra (31 caselle)
-  kTileAbilities = kTileBase + 48,   // 6 abilita' da 5 caselle
+  kTileLabels = kTileBase + 16,      // intestazioni, una dopo l'altra (34 caselle)
+  kTileAbilities = kTileBase + 50,   // 6 abilita' da 5 caselle
   kColorFg = 2, kColorBg = 3,        // come le lettere del gioco
   kTileAttr = 0x2400,                // palette 1 e priorita', come le scritte del menu
 };
@@ -194,7 +194,7 @@ static const struct { const char *text; uint8 tiles; } kLabels[] = {
   { "STRUMENTO", 5 },
   { "AZIONE", 3 },
   { "EQUIPAGGIAMENTO", 8 },
-  { "LABIRINTO", 5 },
+  { "OGGETTI LABIRINTO", 8 },
   { "AMULETI", 5 },
   { "CRISTALLI", 5 },
 };

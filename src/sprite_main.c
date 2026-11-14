@@ -2,6 +2,7 @@
 #include "sprite.h"
 #include "hd_world.h"
 #include "hd_burn.h"
+#include "hd_fx.h"
 #include "tagalong.h"
 #include "ancilla.h"
 #include "overworld.h"
@@ -2862,6 +2863,14 @@ void Sprite_Fireball(int k) {  // 859683
   }
 }
 
+// Burn and freeze: the water froze over the spot where a Zora comes up. It
+// gives up: the swimming Zora picks another spot at once (ice is not water
+// for the game); the walking one of Zora's waterfall always comes up where it
+// stands, so it waits there until the ice is gone
+static bool Zora_UnderIce(int k) {
+  return HdBurn_IsFrozenAt(Sprite_GetX(k) + 8, Sprite_GetY(k) + 8);
+}
+
 void Sprite_Zora_Main(int k) {  // 859725
   static const int8 kSprite_Zora_Surface_XY[8] = {-32, -24, -16, -8, 8, 16, 24, 32};
   static const uint8 kSprite_Zora_AttackGfx[8] = {5, 5, 6, 10, 6, 5, 5, 5};
@@ -2904,6 +2913,12 @@ void Sprite_Zora_Main(int k) {  // 859725
     break;
   case 1:  // surfacing
     sprite_ignore_projectile[k] = sprite_delay_main[k];
+    if (Zora_UnderIce(k)) {  // gives up, a new spot at once
+      sprite_ai_state[k] = 0;
+      sprite_delay_main[k] = 0;
+      sprite_graphics[k] = 0;
+      break;
+    }
     if (!sprite_delay_main[k]) {
       sprite_ai_state[k]++;
       sprite_delay_main[k] = 127;
@@ -3177,6 +3192,8 @@ void Sprite_56_WalkingZora(int k) {  // 859d4a
     if (Sprite_ReturnIfInactive(k))
       return;
     if (!sprite_delay_main[k]) {
+      if (Zora_UnderIce(k))
+        break;  // frozen over: it waits until the ice is gone
       sprite_delay_main[k] = 127;
       sprite_B[k]++;
       sprite_flags3[k] |= 64;
@@ -3187,6 +3204,12 @@ void Sprite_56_WalkingZora(int k) {  // 859d4a
     if (Sprite_ReturnIfInactive(k))
       return;
     sprite_ignore_projectile[k] = sprite_delay_main[k];
+    if (Zora_UnderIce(k)) {  // gives up and waits under the ice
+      sprite_B[k] = 0;
+      sprite_delay_main[k] = 0;
+      sprite_graphics[k] = 0;
+      break;
+    }
     if (!sprite_delay_main[k]) {
       sprite_flags3[k] &= ~0x40;
       SpriteSfx_QueueSfx2WithPan(k, 0x28);
@@ -8512,6 +8535,37 @@ void Sprite_01_Vulture_bounce(int k) {  // 869473
   }
 }
 
+// Items as in FSA (FsaItems): a hammer blow (the hammer down, charged or not)
+// breaks a Deadrock, walking or turned to stone, into pieces as a thrown rock
+// breaks (ThrowableScenery_ScatterIntoDebris); it counts as killed
+static void Deadrock_BreakIntoRock(int k) {
+  sprite_C[k] = 1;  // the pieces of a small rock
+  sprite_oam_flags[k] = 2;  // grey stone: sprite palette 1
+  sound_effect_1 = 0;
+  SpriteSfx_QueueSfx2WithPan(k, 0x1f);
+  Sprite_ManuallySetDeathFlagUW(k);
+  num_sprites_killed++;
+  ThrowableScenery_ScatterIntoDebris(k);
+}
+
+static bool Deadrock_HammerBreaks(int k) {
+  int x, y;
+  if (!g_config.fsa_items || sprite_type[k] != 0x27 || sprite_floor[k] != link_is_on_lower_level ||
+      !Link_HammerDownAt(&x, &y))
+    return false;
+  // the head of the hammer where it strikes, 16 pixels square
+  SpriteHitBox hb;
+  x -= 8, y -= 8;
+  hb.r0_xlo = x, hb.r8_xhi = x >> 8;
+  hb.r1_ylo = y, hb.r9_yhi = y >> 8;
+  hb.r2 = hb.r3 = 16;
+  Sprite_SetupHitBox(k, &hb);
+  if (!CheckIfHitBoxesOverlap(&hb))
+    return false;
+  Deadrock_BreakIntoRock(k);
+  return true;
+}
+
 void Sprite_27_Deadrock(int k) {  // 86948a
   static const uint8 kDeadRock_Gfx[9] = {0, 1, 0, 1, 2, 2, 3, 3, 4};
   static const uint8 kDeadRock_OamFlags[9] = {0x40, 0x40, 0, 0, 0, 0x40, 0, 0x40, 0};
@@ -8522,6 +8576,8 @@ void Sprite_27_Deadrock(int k) {  // 86948a
   sprite_oam_flags[k] = sprite_oam_flags[k] & ~0x40 | kDeadRock_OamFlags[j];
   SpriteDraw_SingleLarge(k);
   if (Sprite_ReturnIfInactive(k))
+    return;
+  if (Deadrock_HammerBreaks(k))
     return;
   if (!sprite_F[k] && (Sprite_CheckDamageFromLink(k) & kCheckDamageFromPlayer_Carry) && !sound_effect_1)
     SpriteSfx_QueueSfx2WithPan(k, 0xb);
@@ -25195,6 +25251,10 @@ void Sprite_BA_Whirlpool(int k) {  // 9eee5a
     bool frozen = HdBurn_IsFrozenAt(cur_sprite_x + 8, cur_sprite_y + 8);
     sprite_oam_flags[k] = (sprite_oam_flags[k] & 0x3f) | kWhirlpool_OamFlags[frozen ? 0 : frame_counter >> 3 & 3];
     Oam_AllocateFromRegionB(4);
+    // frozen: drawn as background, so the ice goes over it (it shows again
+    // in the holes of the thaw)
+    if (frozen)
+      HdFx_OamAsBackground(GetOamCurPtr(), 1);
     cur_sprite_x -= 5;
     SpriteDraw_SingleLarge(k);
     if (Sprite_ReturnIfInactive(k))

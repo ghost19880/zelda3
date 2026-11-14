@@ -590,7 +590,12 @@ static int Overworld_AllocSprite(uint8 type) {
           (type == 0xeb || type == 0x53 || type  == 0xf3) ? 14 : 13;
   for (; i >= 0; i--) {
     // (mondo continuo: non al posto di un soldato che segue Link)
-    if (sprite_state[i] == 0 || sprite_type[i] == 0x41 && sprite_C[i] != 0 && !HdWorld_Carried(i))
+    // A probe has no place in the area's table (sprite_N_word 0xffff): a
+    // soldier just loaded where a probe was keeps its old sprite_C until its
+    // first step, and with all the enemies loaded in one frame the next one
+    // took its place (the soldier never showed and stayed "loaded")
+    if (sprite_state[i] == 0 || sprite_type[i] == 0x41 && sprite_C[i] != 0 && sprite_N_word[i] == 0xffff &&
+        !HdWorld_Carried(i))
       break;
   }
   return i;
@@ -2432,6 +2437,14 @@ void Sprite_CalculateSwordDamage(int k) {  // 86ed3f
     damage_type_determiner = 3;
   link_sword_delay_timer = 4;
   set_when_damaging_enemies = 16;
+  // charged hammer (FsaItems): twice the damage on what the hammer touches,
+  // as in FSA (8 -> 16); the special values (stun, transform, 249 and up) stay
+  if ((link_item_in_hand & 2) && Link_HammerBlowCharged() &&
+      !(sprite_type[k] >= 0xD8)) {
+    uint8 dmg = kEnemyDamages[damage_type_determiner * 8 | enemy_damage_data[sprite_type[k] * 16 | damage_type_determiner]];
+    Sprite_GiveDamage(k, dmg < 124 ? dmg * 2 : dmg, 0x9d);
+    return;
+  }
   Sprite_ApplyCalculatedDamage(k, 0x9d);
 }
 

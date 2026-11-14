@@ -22,6 +22,7 @@
 #include "hd_world.h"
 #include "tile_detect.h"
 #include "overworld.h"
+#include "hd_burn.h"
 #include "zelda_rtl.h"
 #include "variables.h"
 #include "dungeon.h"
@@ -162,7 +163,9 @@ uint8 HdWater_DungAttr(int i, int wx, int wy) {
   if (HdFx_DungeonPassing() && room == (g_attr_prev_room & 0xff) &&
       room != (dungeon_room_index & 0xff))
     return g_attr_prev[i];
-  return g_attr_cached ? g_attr_cache[i] : dung_bg2_attr_table[i];
+  // frozen water (hd_burn.c) is ice for the game: the HD water still flows
+  // under the ice, and shows in the holes of the thaw
+  return HdBurn_UnfrozenAttr(i, g_attr_cached ? g_attr_cache[i] : dung_bg2_attr_table[i]);
 }
 
 // Le case non sono labirinti (cur_palace_index_x2 0xff): nei labirinti le
@@ -344,6 +347,13 @@ void HdWater_BeforeEffects(uint8 *pixels, int pitch, int width, int height) {
 static int CellEntry(int wx, int wy) {
   if (wx < 0 || wy < 0)
     return -1;
+  if (overworld_screen_index >= 0x80) {
+    // Special areas (Zora's waterfall...) go on in the world past their edge
+    // (south of the waterfall the river of the Light World): a cell past the
+    // edge is the edge's own, not the far side of the map, so no shore there
+    wx = IntMin(IntMax(wx, ow_scroll_vars0.xstart), ow_scroll_vars0.xend + 255);
+    wy = IntMin(IntMax(wy, ow_scroll_vars0.ystart), ow_scroll_vars0.yend + 223);
+  }
   int shown = HdFx_OwShownEntry(wx, wy);
   if (shown >= 0)
     return shown;
@@ -369,6 +379,28 @@ int HdWater_OwEntry(int wx, int wy) {
 // resto roccia. Nel Dominio di Zora e alla Cascata dei Desideri
 static bool IsWaterfallEdgeTile(int t) {
   return t == 0x1c8 || t == 0x1e5 || t == 0x1e6 || (t >= 0x1f3 && t <= 0x1f6);
+}
+
+// A fall cell 0x1ca-0x1cd within two cells of (wx, wy) on the side dir
+static bool FallNear(int wx, int wy, int dir) {
+  for (int i = 1; i <= 2; i++)
+    if (HdWater_IsWaterfallEntry(CellEntry(wx + dir * 8 * i, wy)))
+      return true;
+  return false;
+}
+
+// The outdoor cell at world pixel (wx, wy) belongs to a waterfall, as the HD
+// water draws it (FindFallParts): the falls 0x1ca-0x1cd, the water with
+// palette 7 between them (the hidden entrance of the Waterfall of Wishing)
+// and the diagonal edges beside them. Ice never covers them (hd_burn.c)
+bool HdWater_IsFallCellAt(int wx, int wy) {
+  int e = CellEntry(wx, wy);
+  if (e < 0 || (e >> 10 & 7) != 7)
+    return false;
+  if (HdWater_IsWaterfallEntry(e))
+    return true;
+  bool left = FallNear(wx, wy, -1), right = FallNear(wx, wy, 1);
+  return IsWaterfallEdgeTile(e & 0x3ff) ? left || right : left && right;
 }
 
 // caselle esaminate anche oltre i bordi dello schermo (kCellMargin per lato):
@@ -544,14 +576,17 @@ static void FindFallParts(void) {
 // Vasche dei villaggi: 2 file di caselle con la palette 7, 0x126/0x127 sopra
 // e 0x136/0x137 sotto (la stessa casella + 0x10). Dentro i pixel azzurri
 // sono acqua
+bool HdWater_IsTroughPair(int e, int b) {
+  if (e < 0 || b < 0 || (e >> 10 & 7) != 7 || (b >> 10 & 7) != 7)
+    return false;
+  int t = e & 0x3ff;
+  return (t == 0x126 || t == 0x127) && (b & 0x3ff) == t + 0x10;
+}
+
 static void FindTroughs(void) {
   for (int cy = 0; cy < kMaxCellsY - 1; cy++) {
     for (int cx = 0; cx < kMaxCellsX; cx++) {
-      int e = g_cell_entry[cy][cx], b = g_cell_entry[cy + 1][cx];
-      if (e < 0 || b < 0 || (e >> 10 & 7) != 7 || (b >> 10 & 7) != 7)
-        continue;
-      int t = e & 0x3ff;
-      if ((t == 0x126 || t == 0x127) && (b & 0x3ff) == t + 0x10 && g_cells[cy][cx] == kCellOther &&
+      if (HdWater_IsTroughPair(g_cell_entry[cy][cx], g_cell_entry[cy + 1][cx]) && g_cells[cy][cx] == kCellOther &&
           g_cells[cy + 1][cx] == kCellOther)
         g_cells[cy][cx] = g_cells[cy + 1][cx] = kCellTrough;
     }

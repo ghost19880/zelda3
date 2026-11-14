@@ -53,8 +53,8 @@ void AncillaAdd_FireRodShot(uint8 type, uint8 y);
 // Four Swords Adventures items held down (FsaItems)
 void AncillaAdd_FireRodPuff(void);
 void AncillaAdd_IceRodPuff(void);
-void AncillaAdd_BowChargeFlash(void);
-void AncillaAdd_BowChargeSparkle(void);
+void AncillaAdd_ItemChargeFlash(void);
+void AncillaAdd_ItemChargeSparkle(void);
 void AncillaAdd_NockedArrow(void);
 void Arrow_StartOnBow(int k);
 void Arrow_MakeCharged(int k);
@@ -99,6 +99,9 @@ void Ancilla06_WallHit(int k);
 void Ancilla_SwordWallHit(int k);
 void WallHit_Draw(int k);
 void Ancilla07_Bomb(int k);
+// bombs still waiting (Link's and the enemies') that touch takes go off
+// within delay frames
+void Bombs_SetOff(bool (*touch)(int x, int y, void *ctx), void *ctx, int delay);
 void Ancilla_ApplyConveyor(int k);
 void Bomb_CheckSpriteAndPlayerDamage(int k);
 void Ancilla_HandleLiftLogic(int k);
