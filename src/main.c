@@ -27,6 +27,7 @@
 #include "util.h"
 #include "audio.h"
 #include "hd_menu.h"
+#include "hd_fx.h"
 #include "hd_art.h"
 #include "select_file.h"
 #include "hd_cheats.h"
@@ -38,9 +39,6 @@ static bool LoadRom(const char *filename);
 static void LoadLinkGraphics();
 static void RenderNumber(uint8 *dst, size_t pitch, int n, bool big);
 static void HandleInput(int keyCode, int modCode, bool pressed);
-static bool NameKeyDown(int sym, int mod);
-static bool g_name_key_as_button;  // tasto usato come pulsante nella schermata del nome
-static void NameTypeUtf8(const char *s);
 static void HandleCommand(uint32 j, bool pressed);
 static int RemapSdlButton(int button);
 static void HandleGamepadInput(int button, bool pressed);
@@ -65,6 +63,44 @@ static SDL_Window *g_window;
 static uint8 g_paused, g_turbo, g_replay_turbo = true, g_cursor = true;
 static uint8 g_current_window_scale;
 static uint8 g_gamepad_buttons;
+// Stick turned around (zelda_rtl.h): a full turn within kStickCircleMs, then
+// the sword within kStickCircleKeepMs
+enum { kStickCircleMs = 600, kStickCircleKeepMs = 400, kStickCircleTurn = 224 };  // 224/256 of a turn
+bool g_stick_circle;
+uint32 g_stick_circle_at;  // (ticks; also set by the local test tool)
+
+// Before each game frame: a turn not followed by the sword in time is gone
+static void StickCircle_Expire(void) {
+  if (g_stick_circle && SDL_GetTicks() - g_stick_circle_at > kStickCircleKeepMs)
+    g_stick_circle = false;
+}
+
+// The stick at angle (256 a turn) out of the dead zone, or back in it (in < 0)
+static void StickCircle_Track(int angle) {
+  static bool turning;
+  static uint8 last;
+  static int turn;
+  static uint32 start;
+  uint32 now = SDL_GetTicks();
+  if (angle < 0) {
+    turning = false;
+    return;
+  }
+  if (!turning || now - start > kStickCircleMs) {
+    turning = true, turn = 0, start = now;
+  } else {
+    int d = (int8)((uint8)angle - last);
+    if ((d > 4 && turn < 0) || (d < -4 && turn > 0))
+      turn = 0, start = now;  // the other way round: it starts again
+    turn += d;
+    if (turn >= kStickCircleTurn || turn <= -kStickCircleTurn) {
+      g_stick_circle = true;
+      g_stick_circle_at = now;
+      turn = 0, start = now;
+    }
+  }
+  last = (uint8)angle;
+}
 static int g_input1_state;
 static bool g_display_perf;
 static int g_curr_fps;
@@ -588,15 +624,8 @@ int main(int argc, char** argv) {
         }
         break;
       case SDL_KEYDOWN:
-        if (!HdMenu_HandleKey(event.key.keysym.sym, event.key.keysym.mod, true) &&
-            !NameKeyDown(event.key.keysym.sym, event.key.keysym.mod))
+        if (!HdMenu_HandleKey(event.key.keysym.sym, event.key.keysym.mod, true))
           HandleInput(event.key.keysym.sym, event.key.keysym.mod, true);
-        break;
-      case SDL_TEXTINPUT:
-        // il testo di un tasto usato come pulsante (NameKeyDown) non si scrive
-        if (NameFile_IsTyping() && !g_name_key_as_button)
-          NameTypeUtf8(event.text.text);
-        g_name_key_as_button = false;
         break;
       case SDL_KEYUP:
         if (!HdMenu_HandleKey(event.key.keysym.sym, event.key.keysym.mod, false))
@@ -629,7 +658,8 @@ int main(int argc, char** argv) {
     }
 
     if (g_paused) {
-      if (g_pause_redraw) {
+      // menu closed during the pause: drawn again while its blur fades out
+      if (g_pause_redraw || HdFx_MenuBlurAmount() > 0) {
         g_pause_redraw = false;
         DrawPpuFrameWithPerf();
       }
@@ -662,6 +692,7 @@ int main(int argc, char** argv) {
         hr_inputs |= g_gamepad_buttons;
         SDL_LockMutex(g_audio_mutex);
         TurboAudio_Set(false);
+        StickCircle_Expire();
         ZeldaRunFrame(hr_inputs);
         HdMenu_AfterFrame();
         SDL_UnlockMutex(g_audio_mutex);
@@ -689,6 +720,7 @@ int main(int argc, char** argv) {
 
     SDL_LockMutex(g_audio_mutex);
     TurboAudio_Set(g_turbo && g_audiobuffer != NULL);
+    StickCircle_Expire();
     bool is_replay = ZeldaRunFrame(inputs);
     TurboAudio_Frame();
     HdMenu_AfterFrame();
@@ -883,43 +915,6 @@ static void HandleCommand_Locked(uint32 j, bool pressed) {
   }
 }
 
-// Schermata del nome: i tasti dei caratteri scrivono il nome (il carattere
-// arriva con SDL_TEXTINPUT) invece di premere i tasti del joypad; Backspace
-// cancella. Frecce, Invio (Start) e i tasti con Ctrl o Alt restano quelli.
-// Col cursore su una freccia o su FINE i tasti dei pulsanti A/B/X/Y premono
-// il pulsante (per scegliere FINE senza Start), altrove scrivono la lettera
-static bool NameKeyDown(int sym, int mod) {
-  g_name_key_as_button = false;
-  if (!NameFile_IsTyping() || (mod & (KMOD_CTRL | KMOD_ALT)))
-    return false;
-  if (NameFile_CursorOnControl()) {
-    int cmd = FindCmdForSdlKey(sym, mod);
-    if (cmd >= kKeys_Controls + 6 && cmd <= kKeys_Controls + 9) {
-      g_name_key_as_button = true;
-      return false;
-    }
-  }
-  if (sym == SDLK_BACKSPACE) {
-    NameFile_TypeChar('\b');
-    return true;
-  }
-  // tasti dei caratteri in qualunque lingua della tastiera (anche le vocali accentate): i
-  // tasti senza carattere (frecce, F1...) hanno SDLK_SCANCODE_MASK
-  return sym >= 32 && sym != SDLK_DELETE && !(sym & SDLK_SCANCODE_MASK);
-}
-
-// Testo UTF-8 dalla tastiera: le vocali accentate (tastiera italiana)
-// diventano quelle semplici, la griglia del gioco non ha accenti
-static void NameTypeUtf8(const char *s) {
-  static const char kAccents[] = "AAAAAAACEEEEIIIIDNOOOOO#OUUUUYTsaaaaaaaceeeeiiiidnooooo#ouuuuyty";
-  for (const uint8 *p = (const uint8 *)s; *p; p++) {
-    if (*p < 0x80)
-      NameFile_TypeChar((char)*p);
-    else if (*p == 0xc3 && p[1] >= 0x80 && p[1] < 0xc0)
-      NameFile_TypeChar(kAccents[*++p - 0x80]);
-  }
-}
-
 static void HandleInput(int keyCode, int keyMod, bool pressed) {
   int j = FindCmdForSdlKey(keyCode, keyMod);
   if (j != 0)
@@ -1039,6 +1034,9 @@ static void HandleGamepadAxisInput(int gamepad_id, int axis, int value) {
       };
       uint8 angle = (uint8)(int)(ApproximateAtan2(last_y, last_x) * 64.0f + 0.5f);
       buttons = kSegmentToButtons[(uint8)(angle + 16 + 64) >> 5];
+      StickCircle_Track(angle);
+    } else {
+      StickCircle_Track(-1);
     }
     g_gamepad_buttons = buttons;
   } else if ((axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT || axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT)) {
@@ -1231,6 +1229,10 @@ void Host_ClearInputs() {
 
 bool Host_PauseDimmed() {
   return g_paused && g_pause_dimmed;
+}
+
+bool Host_Paused() {
+  return g_paused;
 }
 
 void Host_Quit() {

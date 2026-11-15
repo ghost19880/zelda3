@@ -14,6 +14,10 @@ void HdLight_AfterRender(Ppu *ppu);
 void HdLight_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y);
 // Alone delle fate, dopo l'acqua HD
 void HdLight_FairyGlow(uint8 *pixels, int pitch, int width, int height);
+// Colour c (0xRRGGBB) of screen pixel (x, y) with this frame's light, as
+// HdLight_Apply gave the background: for what is drawn after it over the
+// scenery (the frozen water); c unchanged when no light was applied
+uint32 HdLight_Relight(int x, int y, uint32 c);
 
 // Fiamme del frame, in coordinate dello schermo (sorgenti delle braci)
 enum { kHdMaxFire = 400 };

@@ -429,7 +429,10 @@ static bool SceneOn(void) {
   // labirinto (anche scorrimenti, scale e la dissolvenza della caduta) e
   // dialoghi; mai la mappa del mondo in Mode 7
   return g_config.fx_pit && RoomIndoors() && g_zenv.ppu->mode == 1 &&
-         (HdFx_DungeonRoomRuns() || main_module_index == 14);
+         (HdFx_DungeonRoomRuns() || main_module_index == 14 ||
+          // the room stays on screen until the screen changes: the closing
+          // circle on the way out (15), boss victory, save and quit...
+          HdFx_SceneModule() == 7);
 }
 
 void HdPit_BeforeRender(void) {
@@ -765,7 +768,7 @@ static void GbaMireFloor(uint8 *pixels, int pitch, int width, int height) {
   Ppu *ppu = g_zenv.ppu;
   if (!(enhanced_features0 & kFeatures0_GbaMinorFixes) || !player_is_indoors ||
       cur_palace_index_x2 != 0x0e || ppu->mode != 1 || ppu->forcedBlank ||
-      (main_module_index != 7 && main_module_index != 14))
+      (main_module_index != 7 && main_module_index != 14 && HdFx_SceneModule() != 7))
     return;
   int bright = ScreenBright(ppu);
   if (!bright)

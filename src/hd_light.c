@@ -69,6 +69,11 @@ static bool g_lit_dark_room;          // stanza buia gia' illuminata del tutto d
 static uint8 g_saved_fixed[3], g_saved_sub_enabled;
 static float *g_factor;               // fattori di luce per pixel (3 canali)
 static int g_factor_cap;
+// g_factor holds this frame's light (HdLight_Relight): its width, and the
+// extra multiplication and the colour subtracted that went with it
+static bool g_factor_valid;
+static int g_factor_w, g_factor_sub;
+static float g_factor_extra;
 int g_hd_light_sub;
 
 // la scena di gioco in vista, come per gli altri effetti HD (prima qui un
@@ -972,6 +977,7 @@ void HdLight_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
     CollectRevivalFairy(width, bias_x, bias_y);
   g_hd_num_fire = 0;
   g_hd_light_sub = 0;
+  g_factor_valid = false;
   if (!HdFx_InGameplay(&mod) || (!g_config.dynamic_light && !g_config.fx_heat)) {
     g_ambient = 1.0f;
     g_ambient_sub = 0.0f;
@@ -1153,6 +1159,8 @@ void HdLight_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
         g_factor[i * 3] += cr * v, g_factor[i * 3 + 1] += cg * v, g_factor[i * 3 + 2] += cb * v;
     }
   }
+  g_factor_valid = true;
+  g_factor_w = width, g_factor_sub = sub, g_factor_extra = extra;
   // Applicazione: l'HUD e i testi (layer 2 nel byte alto) restano intatti.
   // Sprites (layers 4 and 6): the dark hides them as in the game (in a dark
   // room they are seen only where there is light), but a light never makes
@@ -1192,6 +1200,19 @@ void HdLight_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
       row[x] = (c & 0xff000000) | HdFx_ClampByte(r) << 16 | HdFx_ClampByte(g) << 8 | HdFx_ClampByte(b);
     }
   }
+}
+
+uint32 HdLight_Relight(int x, int y, uint32 c) {
+  if (!g_factor_valid || x < 0 || y < 0 || x >= g_factor_w)
+    return c;
+  const float *f = g_factor + (y * g_factor_w + x) * 3;
+  float extra = g_factor_extra;
+  float fr = f[0] < 1.35f + extra ? f[0] : 1.35f + extra;
+  float fg = f[1] < 1.30f + extra ? f[1] : 1.30f + extra;
+  float fb = f[2] < 1.25f + extra ? f[2] : 1.25f + extra;
+  int r = (int)(((c >> 16) & 0xff) * fr) - g_factor_sub, g = (int)(((c >> 8) & 0xff) * fg) - g_factor_sub;
+  int b = (int)((c & 0xff) * fb) - g_factor_sub;
+  return (c & 0xff000000) | HdFx_ClampByte(r) << 16 | HdFx_ClampByte(g) << 8 | HdFx_ClampByte(b);
 }
 
 // After loading a quick save: the light starts again from the loaded place

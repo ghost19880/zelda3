@@ -1920,6 +1920,25 @@ static bool IsMountainCell(int cell) {
   return false;
 }
 
+// Islands of the map: areas reached from the ones around them only through
+// a cave, a warp or the mirror, never by walking. 0 = the plain, 1 = Death
+// Mountain (both worlds), 2 = Misery Mire (Dark World, walled in by cliffs),
+// 3 = the Ice Palace lake (Dark World) only when Link came by the warp under
+// the heavy rock on the Lake Hylia island (lake_warp): walked or swum into
+// from the areas around it, it is part of the plain. Only areas of Link's
+// island are kept alive as neighbours (HdWorld_TickNeighbors): the others
+// are never seen, and their enemies ran for nothing
+static int AreaIsland(int cell, bool dark, bool lake_warp) {
+  cell &= 0x3f;
+  if (IsMountainCell(cell))
+    return 1;
+  if (dark && (cell == 0x30 || cell == 0x31 || cell == 0x38 || cell == 0x39))
+    return 2;
+  if (dark && lake_warp && (cell == 0x35 || cell == 0x36 || cell == 0x3d || cell == 0x3e))
+    return 3;
+  return 0;
+}
+
 static bool MountainAbove(int head, int *top) {
   int a = head & 0x3f, x, y, s;
   AreaRect(a, &x, &y, &s);
@@ -1935,11 +1954,15 @@ static bool MountainAbove(int head, int *top) {
 }
 
 // Colonna accanto all'area (cx) con almeno una casella dell'altro livello
-static bool OtherLevelAt(int cx, int y, int s, bool mountain) {
+// Only the 512-px cells of rows y0..y1-1 count (the rows in view): on top of
+// the eastern mountain (0x05) the right side leads to Turtle Rock (0x07), the
+// plain (0x0f) is beside the lower half only, and the view stopped at the
+// edge as if the plain were there, with Link pushing it
+static bool OtherLevelAt(int cx, int y, int s, int y0, int y1, bool mountain) {
   if (cx < 0 || cx >= 4096)
     return false;
   for (int cy = y; cy < y + s; cy += 512)
-    if (IsMountainCell((cy >> 9) * 8 + (cx >> 9)) != mountain)
+    if (cy + 512 > y0 && cy < y1 && IsMountainCell((cy >> 9) * 8 + (cx >> 9)) != mountain)
       return true;
   return false;
 }
@@ -1984,9 +2007,11 @@ static void ClampViewArea(int *cam_x, int *cam_y) {
   int a = overworld_screen_index & 0x3f, x, y, s;
   AreaRect(a, &x, &y, &s);
   bool mountain = IsMountainCell(a);
-  if (OtherLevelAt(x - 1, y, s, mountain) && gx >= x && x + ext > min_x)
+  // rows in view (the vertical limits come first)
+  int vy0 = *cam_y < min_y ? min_y : *cam_y > max_y ? max_y : *cam_y, vy1 = vy0 + rows;
+  if (OtherLevelAt(x - 1, y, s, vy0, vy1, mountain) && gx >= x && x + ext > min_x)
     min_x = x + ext;
-  if (OtherLevelAt(x + s, y, s, mountain) && gx <= x + s - 256 && x + s - 256 - ext < max_x)
+  if (OtherLevelAt(x + s, y, s, vy0, vy1, mountain) && gx <= x + s - 256 && x + s - 256 - ext < max_x)
     max_x = x + s - 256 - ext;
   if (*cam_x < min_x) *cam_x = min_x;
   if (*cam_x > max_x) *cam_x = max_x;
@@ -2394,6 +2419,11 @@ static void LoadedColumns(int ext, int *x0, int *x1) {
   // altre ripetono un pezzo di mappa finche' il passaggio non e' finito
   if (main_module_index == 9 && submodule_index == 0x2e)
     *x0 += ext, *x1 -= ext;
+  // the game loads the map in 16-pixel columns as the camera moves: the
+  // outermost one of the wide screen can still hold the old tiles (a strip
+  // with a stale background and stray rocks on the left edge when walking
+  // left); only whole columns count, the rest comes from the area image
+  *x0 = (*x0 + 15) & ~15, *x1 &= ~15;
   if (*x0 < ax) *x0 = ax;
   if (*x1 > ax + as) *x1 = ax + as;
 }
@@ -2474,6 +2504,7 @@ typedef struct OverlayCtx {
   bool half;   // somma dimezzata
   int blend;   // al posto della meta': fusione GBA in sedicesimi (Ppu.gbaBlend)
   int x0, y0;  // posizione nello strato del pixel 0,0 dello schermo
+  bool flat;   // every drawn pixel of the layer is its colour 1 (improved rain)
 } OverlayCtx;
 
 static void OverlayBegin(OverlayCtx *o, int ext) {
@@ -2488,6 +2519,7 @@ static void OverlayBegin(OverlayCtx *o, int ext) {
   o->blend = ppu->gbaBlend > 16 ? 16 : ppu->gbaBlend;
   o->x0 = ppu->bgLayer[0].hScroll + ppu->bgBiasX - ext;
   o->y0 = ppu->bgLayer[0].vScroll + ppu->bgBiasY + 1;
+  o->flat = false;
   // nebbia del Bosco Perduto migliorata: la disegna hd_fx.c su tutto
   if (HdFx_FogReplacesOverlay())
     o->on = o->sky = false;
@@ -2498,6 +2530,8 @@ static void OverlayBegin(OverlayCtx *o, int ext) {
 static int OverlayColor(const OverlayCtx *o, int sx, int sy) {
   Ppu *ppu = g_zenv.ppu;
   int c = HdFx_BgTilePixel(ppu, &ppu->bgLayer[0], o->x0 + sx, o->y0 + sy);
+  if (c && o->flat)
+    c = (c & ~0xf) | 1;
   return c ? HdFx_RealBg(ppu->cgram, c) : -1;
 }
 
@@ -2570,6 +2604,43 @@ static inline uint32 OverlayBlend(const OverlayCtx *o, uint32 c, int sx, int sy)
     return PackSat(c, r, g, b);
   }
   return (c & 0xff000000) | (((c >> 16 & 255) + r) >> 1) << 16 | (((c >> 8 & 255) + g) >> 1) << 8 | ((c & 255) + b) >> 1;
+}
+
+// The weather layer (rain and the storm's dark, fog, clouds) over a colour an
+// HD effect draws after the PPU, as the game sums it over the scenery: the
+// ice of the Ice Rod and the Ether lies under the rain. With the improved
+// rain the layer is the plain storm colour (its drops fall afterwards,
+// HdFx_RainOverIce). One context per frame: HdWorld_WeatherBegin
+static OverlayCtx g_weather;
+
+bool HdWorld_WeatherBegin(void) {
+  OverlayBegin(&g_weather, g_zenv.ppu->extraLeftRight);
+  g_weather.flat = HdFx_RainFlat();
+  return g_weather.on;
+}
+
+uint32 HdWorld_WeatherOnto(uint32 c, int sx, int sy) {
+  return g_weather.on ? OverlayBlend(&g_weather, c, sx, sy) : c;
+}
+
+// The colour under the layer (WeatherOnto undone, for the plain and the
+// halved sum): what the scenery looks like without the rain
+uint32 HdWorld_WeatherOff(uint32 c, int sx, int sy) {
+  if (!g_weather.on || g_weather.blend)
+    return c;
+  int col = OverlayColor(&g_weather, sx, sy);
+  if (!g_weather.half && col < 0)
+    col = FixedColor15(g_zenv.ppu);
+  if (col <= 0)
+    return c;
+  uint32 oc = Dim(HdFx_Bgr15ToRgb((uint16)col));
+  int ch[3];
+  for (int k = 0; k < 3; k++) {
+    int v = c >> (8 * k) & 255, o = oc >> (8 * k) & 255;
+    v = g_weather.half ? 2 * v - o : v - o;
+    ch[k] = v < 0 ? 0 : v > 255 ? 255 : v;
+  }
+  return (c & 0xff000000) | ch[2] << 16 | ch[1] << 8 | ch[0];
 }
 
 // Ridisegna le caselle animate delle immagini visibili con il fotogramma
@@ -3662,8 +3733,12 @@ static bool AreaHasBoulders(int head) {
 bool HdWorld_BoulderGone(int k) {
   if (!g_hd_neighbor_tick)
     return false;
-  int head = HdWorld_AreaAt(SpriteWorldX(k) + 8, SpriteWorldY(k) + 8);
-  return head >= 0 && !AreaHasBoulders(head);
+  int x = SpriteWorldX(k), y = SpriteWorldY(k);
+  int head = HdWorld_AreaAt(x + 8, y + 8);
+  // only once out of view (the 32x32 rock and its height): it vanished in
+  // mid-screen as soon as it entered an area without rocks
+  return head >= 0 && !AreaHasBoulders(head) &&
+         !HdWorld_BoxInView(x - 8, y - 8 - sprite_z[k], 32, 32 + sprite_z[k], 8);
 }
 
 // Una casella di un'area vicina cambia (fuoco che passa il bordo, hd_burn.c):
@@ -3764,6 +3839,12 @@ static bool LiveBuild(LiveArea *la, int head, int vx, int vy) {
         break;
       }
   }
+  // its own random numbers and its own falling-rock timer: copied from the
+  // game they stayed in step with it (the frame counter is shared), and the
+  // rocks of two areas fell at the same moment and bounced the same way, two
+  // twin rocks moving side by side
+  byte_7E0FA1 ^= (uint8)(0x5b + head * 29);
+  byte_7E0FFE += (uint8)(21 + head * 13);
   memcpy(la->ram, g_ram, sizeof(g_saved_ram));
   memcpy(la->ppu, g_zenv.ppu, sizeof(Ppu));
   return true;
@@ -3964,10 +4045,23 @@ void HdWorld_TickNeighbors(void) {
   bool big = as > 512;
   int want[64], nw = 0;
   bool want_near[64], want_reach[64], want_hold[64];
+  // Only areas of Link's island (AreaIsland): from the mountain the copy of
+  // the Sanctuary area below ran with all its enemies, and the other way round
+  bool dark = (cur & 0x40) != 0;
+  // Ice Palace lake: isolated when Link did not come in from an area next to
+  // it in the same world (the warp from the Light World); going into the
+  // palace and back out keeps the area, so it stays isolated
+  static int s_prev = -1;
+  static bool s_lake_warp;
+  if (cur != s_prev) {
+    s_lake_warp = (cur & 0x7f) == 0x75 && s_prev >= 0 && AreaGap(s_prev, cur) != 0;
+    s_prev = cur;
+  }
+  int island = AreaIsland(cur, dark, s_lake_warp);
   for (int sy = 0; sy < 8; sy++)
     for (int sx = 0; sx < 8; sx++) {
       int head = HeadAt(sx * 512, sy * 512), i = 0;
-      if (head < 0 || head == cur || !AreaKept(head, cur))
+      if (head < 0 || head == cur || !AreaKept(head, cur) || AreaIsland(sy * 8 + sx, dark, s_lake_warp) != island)
         continue;
       bool near = SquareInView(sx, sy, vx, vy, ext, kLiveMargin);
       bool reach = SquareInView(sx, sy, vx, vy, ext, kBigReach);

@@ -1950,6 +1950,38 @@ void WallHit_Draw(int k) {  // 8894df
 
 }
 
+// BurnAndFreezeInteraction, as in BS Zelda Ancient Stone Tablets ($08:9D50):
+// when the fuse runs out under the rain the bomb does not go off, it fizzles
+// out in a puff of smoke. Returns 0 to explode as usual, 1 to wait (no free
+// garnish slot: the fuse stays at its end and it tries again the next frame),
+// 2 when the bomb is gone
+static int Bomb_FizzleInRain(int k) {
+  if (!(enhanced_features0 & kFeatures0_BurnAndFreeze) ||
+      !HdBurn_RainAt(Ancilla_GetX(k), Ancilla_GetY(k)))
+    return 0;
+  int j = GarnishAlloc();
+  if (j < 0)
+    return 1;
+  garnish_type[j] = 10;
+  garnish_active = 10;
+  uint16 x = Ancilla_GetX(k) - 8;
+  uint16 y = Ancilla_GetY(k) - (int8)ancilla_z[k] + 8;
+  garnish_x_lo[j] = x, garnish_x_hi[j] = x >> 8;
+  garnish_y_lo[j] = y, garnish_y_hi[j] = y >> 8;
+  garnish_sprite[j] = ancilla_floor[k];
+  garnish_countdown[j] = 15;
+  Ancilla_Sfx3_Pan(k, 6);
+  if (k + 1 == flag_is_ancilla_to_pick_up) {
+    flag_is_ancilla_to_pick_up = 0;
+    if (link_state_bits & 0x80) {
+      link_state_bits = 0;
+      link_cant_change_direction = 0;
+    }
+  }
+  ancilla_type[k] = 0;
+  return 2;
+}
+
 void Ancilla07_Bomb(int k) {  // 88955a
   if (submodule_index) {
     if (submodule_index == 8 || submodule_index == 16) {
@@ -2041,10 +2073,13 @@ label1:
   ancilla_dir[k] = s1a;
   ancilla_objprio[k] |= s1b;
   Bomb_CheckSpriteAndPlayerDamage(k);
-  if (!--ancilla_arr3[k]) {
+  int fizzle = ancilla_item_to_link[k] == 0 && ancilla_arr3[k] == 1 ? Bomb_FizzleInRain(k) : 0;
+  if (fizzle == 2)
+    return;
+  if (fizzle == 0 && !--ancilla_arr3[k]) {
     if (++ancilla_item_to_link[k] == 1) {
       Ancilla_Sfx2_Pan(k, 0xc);
-      HdRumble_At(kRumble_Explosion, Ancilla_GetX(k), Ancilla_GetY(k));
+      HdRumble(kRumble_Bomb);
       if (k + 1 == flag_is_ancilla_to_pick_up) {
         flag_is_ancilla_to_pick_up = 0;
         if (link_state_bits & 0x80) {
@@ -2509,6 +2544,15 @@ next_step:
   if (g_arrow_charged[k]) {
     if (steps == 2)
       AncillaAdd_ChargedArrowSparkle(k);
+    // as in FSA the charged arrow cuts the bushes and the tall grass it
+    // flies through, before the wall check, and keeps flying (FsaItems only,
+    // as the charge itself: LinkBow_Charge)
+    if (g_config.fsa_items && !player_is_indoors) {
+      static const int8 kTip_X[4] = {8, 8, 0, 16};  // as Arrow_SmashPot
+      static const int8 kTip_Y[4] = {0, 16, 5, 5};
+      int d = ancilla_dir[k] & 3;
+      Overworld_ArrowCut(Ancilla_GetX(k) + kTip_X[d], Ancilla_GetY(k) + kTip_Y[d]);
+    }
   }
   else if (link_item_bow & 4 && !(frame_counter & 1))
     AncillaAdd_SilverArrowSparkle(k);
@@ -3118,9 +3162,12 @@ void EtherSpell_HandleRadialSpin(int k) {  // 88abef
     }
   }
   ancilla_type[k] = 0;
+  // the Ether opens Misery Mire (the game's check, below)
+  bool opens_mire = BYTE(overworld_screen_index) == 0x70 && !(save_ow_event_info[0x70] & 0x20) &&
+                    Ancilla_CheckForEntranceTrigger(2);
   // fine dell'animazione: i nemici si congelano e con loro cespugli ed erba
-  // che si vedono
-  HdBurn_FreezeScreen();
+  // che si vedono; l'acqua no quando apre la Palude dei Desideri (solo li')
+  HdBurn_FreezeScreen(!opens_mire);
   load_chr_halfslot_even_odd = 1;
   byte_7E0324 = 0;
   state_for_spin_attack = 0;
@@ -3128,7 +3175,7 @@ void EtherSpell_HandleRadialSpin(int k) {  // 88abef
   link_cant_change_direction = 0;
   flag_unk1 = 0;
 
-  if (BYTE(overworld_screen_index) == 0x70 && !(save_ow_event_info[0x70] & 0x20) && Ancilla_CheckForEntranceTrigger(2)) {
+  if (opens_mire) {
     trigger_special_entrance = 3;
     subsubmodule_index = 0;
     BYTE(R16) = 0;
@@ -3350,6 +3397,7 @@ void BombosSpell_FinishFireColumns(int kk) {  // 88b236
       return;
   }
   bombos_var4 = 2;
+  HdRumble(kRumble_LinkStrong);  // the blasts start: once, as the FSA medallion
   Medallion_CheckSpriteDamage(kk);
   ancilla_step[kk] = 0;
 }
@@ -3782,6 +3830,7 @@ void Ancilla1F_Hookshot(int k) {  // 88bd74
 
   if (!ancilla_L[k] && !ancilla_step[k] && Ancilla_CheckSpriteCollision(k) >= 0 && !ancilla_step[k]) {
     ancilla_step[k] = 1;
+    HdRumble(kRumble_Light);  // the Hookshot hits an enemy
     ancilla_y_vel[k] = -ancilla_y_vel[k];
     ancilla_x_vel[k] = -ancilla_x_vel[k];
   }
@@ -3825,6 +3874,7 @@ endif_7:
 
   if ((R14 >> 4 | R14 | tiledetect_stair_tile | R12) & 3 && !ancilla_step[k]) {
     ancilla_step[k] = 1;
+    HdRumble(kRumble_Light);  // the Hookshot hits a wall
     ancilla_y_vel[k] = -ancilla_y_vel[k];
     ancilla_x_vel[k] = -ancilla_x_vel[k];
     if (!(tiledetect_misc_tiles & 3)) {
@@ -4776,6 +4826,7 @@ void Ancilla37_WeathervaneExplosion(int k) {  // 88d03d
     ancilla_step[k] = 1;
     Overworld_AlterWeathervane();
     AncillaAdd_CutsceneDuck(0x38, 0);
+    HdRumble(kRumble_BirdFreed);  // a light tap as the bird flies free
   }
   weathervane_var13 = k;
   weathervane_var14 = 0;
@@ -6169,7 +6220,7 @@ void Ancilla3A_BigBombExplosion(int k) {  // 88f18d
   if (!submodule_index && !--ancilla_arr3[k]) {
     if (++ancilla_item_to_link[k] == 2) {
       Ancilla_Sfx2_Pan(k, 0xc);
-      HdRumble_At(kRumble_Explosion, Ancilla_GetX(k), Ancilla_GetY(k));
+      HdRumble(kRumble_SuperBomb);
     }
     if (ancilla_item_to_link[k] == 11) {
       ancilla_type[k] = 0;
@@ -7212,6 +7263,7 @@ void AncillaAdd_EtherSpell(uint8 a, uint8 y) {  // 8991fc
     load_chr_halfslot_even_odd = 9;
     ether_var1 = 0x40;
     sound_effect_2 = Link_CalculateSfxPan() | 0x26;
+    HdRumble(kRumble_LinkStrong);  // only at the start, as the FSA medallion
     for(int i = 0; i < 8; i++)
       ether_arr1[i] = i * 8;
     ether_y = link_y_coord;
@@ -7392,6 +7444,7 @@ void AncillaAdd_QuakeSpell(uint8 a, uint8 y) {  // 899589
     quake_var1 = link_y_coord + 26;
     quake_var2 = link_x_coord + 8;
     quake_var3 = 3;
+    HdRumble(kRumble_LinkStrong);  // only at the start, as the FSA medallion
   }
 }
 

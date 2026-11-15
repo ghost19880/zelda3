@@ -233,8 +233,15 @@ bool HdFx_FogReplacesOverlay(void);
 // Nebbia del bosco sullo schermo (anche quella del gioco): lo shader Four
 // Swords non si applica, rovinerebbe l'atmosfera
 bool HdFx_ForestFogScene(void);
-// Piove nell'area esterna attuale
-bool HdFx_IsRainingOutdoors(void);
+// It rains in outdoor area si (with the world bit): the game's rain and the
+// improved rain fall in the same places
+bool HdFx_IsRainingInArea(int si);
+// This frame the improved rain drew the game's rain layer flattened to its
+// dark storm colour (HdFx_RainBeforeRender)
+bool HdFx_RainFlat(void);
+// Particles and the improved rain's drops, drawn after the frozen water (the
+// ice lies under the rain)
+void HdFx_AfterIce(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y);
 // Sulla Montagna della Morte: la casella e (della mappa) puo' essere nuvola,
 // e il suo colore v e' nuvola
 bool HdFx_IsCloudTile(uint16 e);

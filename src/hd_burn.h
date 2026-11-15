@@ -23,10 +23,13 @@ void HdBurn_MeltWater(uint16 x, uint16 y);
 // tutti i cespugli, l'erba e l'acqua che si vedono sullo schermo; il fuoco poi
 // si propaga oltre come ogni altro, il ghiaccio no
 void HdBurn_IgniteScreen(void);
-void HdBurn_FreezeScreen(void);
+void HdBurn_FreezeScreen(bool water);  // water: also the water
 // Bombs going off set off the bombs near them and set the grass on fire, the
 // fire sets off the bombs on it: once a game frame (Ancilla_Main)
 void HdBurn_Bombs(void);
+// It rains on the outdoor point (x, y), in its own area (not always Link's):
+// fire has no effect there and a bomb fizzles out instead of going off
+bool HdBurn_RainAt(uint16 x, uint16 y);
 // Il cespuglio o l'erba appena tagliati o sollevati, con i resti nel punto
 // (x, y), erano congelati? (allora vanno in pezzi come un vaso, in blu)
 bool HdBurn_TakeFrozen(uint16 x, uint16 y);
@@ -43,6 +46,9 @@ void HdBurn_HurtSpritesInArea(uint8 area);
 // Spegne tutto e dimentica le tile annerite e congelate: entrando in una casa
 // o caricando un salvataggio il gioco fa ricrescere tutti i cespugli
 void HdBurn_Reset(void);
+// Set when the flames hurt Link (cleared by Link_ControlHandler): this damage
+// does not rumble
+extern bool g_hdburn_hurt_link;
 
 // Per il disegno delle fiamme e del ghiaccio (hd_fx.c) e della luce (hd_light.c)
 enum {

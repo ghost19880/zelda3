@@ -2736,7 +2736,6 @@ if_3:
     return true;
   }
   SpriteSfx_QueueSfx2WithPan(k, 6);
-  HdRumble(kRumble_Shield);
   Sprite_PlaceRupulseSpark_2(k);
   if (sprite_type[k] == 0x95) {
     SpriteSfx_QueueSfx3WithPan(k, 0x26);

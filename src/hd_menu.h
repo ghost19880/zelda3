@@ -24,6 +24,8 @@ void Host_SetPpuRenderFlags(uint32 flags);
 void Host_ClearInputs();
 // game paused with the dimmed pause (HdMenu_Draw darkens the game, HUD and texts)
 bool Host_PauseDimmed();
+// The game is paused (any pause, dimmed or not)
+bool Host_Paused();
 void Host_Quit();
 
 void HdMenu_ApplyConfig();

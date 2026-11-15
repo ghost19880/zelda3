@@ -1685,21 +1685,18 @@ static bool g_drops_init;
 static float g_flash;
 static bool g_flash_rise;
 
-static bool IsRaining(int mod) {
-  if (mod != 9)
-    return false;
-  int si = BYTE(overworld_screen_index);
+// It rains in outdoor area si (with the world bit), whatever draws the rain
+// (the game's layer or the improved rain)
+bool HdFx_IsRainingInArea(int si) {
   if (si == 0x70)
     return !(save_ow_event_info[0x70] & 0x20);  // Palude della Miseria
   // Prima del salvataggio di Zelda piove nel Mondo della Luce, tranne dove ci
   // sono le nuvole del Monte Morte
-  return sram_progress_indicator < 2 && si != 3 && si != 5 && si != 7;
+  return sram_progress_indicator < 2 && !(si & 0x40) && si != 3 && si != 5 && si != 7;
 }
 
-// Piove nell'area esterna attuale (anche con l'effetto della pioggia spento):
-// sotto la pioggia il fuoco non attecchisce (hd_burn.c)
-bool HdFx_IsRainingOutdoors(void) {
-  return !player_is_indoors && IsRaining(9);
+static bool IsRaining(int mod) {
+  return mod == 9 && HdFx_IsRainingInArea(BYTE(overworld_screen_index));
 }
 
 // Acqua: i pixel del fondale che cadono su caselle d'acqua (profonda 0x08,
@@ -2118,9 +2115,15 @@ void HdFx_Lightning(uint8 *pixels, int pitch, int width, int height) {
 enum { kRainMaxChars = 64 };
 static uint16 g_rain_chr[kRainMaxChars], g_rain_saved[kRainMaxChars][16];
 static int g_rain_num_chr;
+static bool g_rain_flat;  // this frame the layer was flattened (HdFx_RainFlat)
+
+bool HdFx_RainFlat(void) {
+  return g_rain_flat;
+}
 
 void HdFx_RainBeforeRender(Ppu *ppu) {
   g_rain_num_chr = 0;
+  g_rain_flat = false;
   int mod;
   if (!g_config.fx_rain || BYTE(overlay_index) != 0x9f || !(ppu->screenEnabled[1] & 1) ||
       !HdFx_InGameplay(&mod) || !IsRaining(mod))
@@ -2146,6 +2149,7 @@ void HdFx_RainBeforeRender(Ppu *ppu) {
       t[r] = (uint16)drawn, t[r + 8] = 0;
     }
   }
+  g_rain_flat = g_rain_num_chr > 0;
 }
 
 void HdFx_RainAfterComposite(Ppu *ppu) {
@@ -2294,7 +2298,7 @@ static void DrawGlint(uint8 *pixels, int pitch, int width, int height, int sx, i
 // Congela la tile: i colori diventano quelli del ghiaccio secondo la loro
 // luminosita' (piu' chiari), con un bordo morbido; ogni tanto un luccichio
 static void DrawFrozenTile(uint8 *pixels, int pitch, int width, int height, int sx, int sy,
-                           const HdBurnTile *f, const uint32 *ramp, int nramp) {
+                           const HdBurnTile *f, const uint32 *ramp, int nramp, bool weather) {
   float grow = IceGrow(f);
   for (int y = -1; y < 17; y++) {
     int py = sy + y;
@@ -2310,10 +2314,14 @@ static void DrawFrozenTile(uint8 *pixels, int pitch, int width, int height, int 
       float e = d < 8.0f ? 1.0f : d > 10.5f ? 0.0f : (10.5f - d) * 0.4f;
       if (e <= 0)
         continue;
-      int l = HdFx_Luma(row[px]) / 10;
+      // under the rain: the shade comes from the bush without the rain layer,
+      // and the layer goes over the ice (as the game sums it over the bush)
+      int l = HdFx_Luma(weather ? HdWorld_WeatherOff(row[px], px, py) : row[px]) / 10;
       float t = 0.30f + 0.70f * l / 255.0f;
       int idx = (int)(t * (nramp - 1) + 0.5f);
       uint32 ic = ramp[idx < 0 ? 0 : idx >= nramp ? nramp - 1 : idx];
+      if (weather)
+        ic = HdWorld_WeatherOnto(ic, px, py);
       MixPixel(&row[px], (ic >> 16) & 0xff, (ic >> 8) & 0xff, ic & 0xff, 0.85f * e * grow);
     }
   }
@@ -2534,6 +2542,7 @@ void HdFx_FrozenWater(uint8 *pixels, int pitch, int width, int height, int bias_
     return;
   static const int8 kNear[4][2] = { {-1, 0}, {1, 0}, {0, -1}, {0, 1} };
   static const int8 kFar[8][2] = { {-2, 0}, {2, 0}, {0, -2}, {0, 2}, {-1, -1}, {1, -1}, {-1, 1}, {1, 1} };
+  bool weather = HdWorld_WeatherBegin();  // the ice lies under the rain
   for (int py = 0; py < height; py++) {
     uint32 *row = (uint32 *)(pixels + py * pitch);
     const uint8 *cover = g_ice_cover + py * width, *kind = g_ice_kind + py * width;
@@ -2554,7 +2563,14 @@ void HdFx_FrozenWater(uint8 *pixels, int pitch, int width, int height, int bias_
         if (kind[px] == kIceKindBlock && (tx < 2 || tx > 13 || ty < 2 || ty > 13))
           v = kIceFill;
       }
+      // the ice is drawn after the light (HdLight_Apply): it gets the same
+      // light as the scenery (fires, Zora's fireballs, the Lantern, dark rooms)
+      // (the light falls on the scenery with the rain layer already summed:
+      // the layer first, then the light)
       uint32 ic = g_ice_floor_pal[v];
+      if (weather)
+        ic = HdWorld_WeatherOnto(ic, px, py);
+      ic = HdLight_Relight(px, py, ic);
       MixPixel(&row[px], ic >> 16 & 0xff, ic >> 8 & 0xff, ic & 0xff, cover[px] / 255.0f);
       if ((row[px] >> 24) == kLayerWater)
         row[px] = (row[px] & 0x00ffffff) | 1u << 24;  // non piu' acqua per lo shader
@@ -2579,13 +2595,14 @@ static void ApplyBurning(uint8 *pixels, int pitch, int width, int height, int ca
   if (n) {
     uint32 ramp[7];
     int nramp = IceRamp(ramp);
+    bool weather = HdWorld_WeatherBegin();  // the ice lies under the rain
     for (int i = 0; i < n; i++) {
       const HdBurnTile *f = &tiles[i];
       if (f->water || !HdBurn_TileShown(f))
         continue;  // l'acqua ghiacciata la disegna HdFx_FrozenWater
       int sx = f->x - cam_x + ext, sy = f->y - cam_y;
       if (TileNearScreen(sx, sy, width, height))
-        DrawFrozenTile(pixels, pitch, width, height, sx, sy, f, ramp, nramp);
+        DrawFrozenTile(pixels, pitch, width, height, sx, sy, f, ramp, nramp, weather);
     }
   }
   n = HdBurn_GetScorched(&tiles);
@@ -2644,6 +2661,8 @@ static void ApplyBurning(uint8 *pixels, int pitch, int width, int height, int ca
   }
 }
 
+static bool g_after_ice_on, g_after_ice_step;  // (HdFx_AfterIce)
+
 void HdFx_AfterLight(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y) {
   int mod;
   if (!HdFx_InGameplay(&mod)) {
@@ -2682,6 +2701,24 @@ void HdFx_AfterLight(uint8 *pixels, int pitch, int width, int height, int bias_x
     ApplyPortals(pixels, pitch, width, height, cam_x, cam_y + 1, ext);
   if (g_config.fx_heat && mod == 11)
     ApplyCampfireGlow(pixels, pitch, width, height, cam_x, cam_y, ext);
+  g_after_ice_step = step;
+  g_after_ice_on = true;
+}
+
+// Particles (rain splashes, embers, smoke...) and the improved rain's drops,
+// drawn after the frozen water (HdFx_FrozenWater): the ice of the Ice Rod and
+// the Ether lies under the rain, as it lies under the game's rain layer
+// (HdWorld_WeatherOnto)
+void HdFx_AfterIce(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y) {
+  if (!g_after_ice_on)
+    return;
+  g_after_ice_on = false;
+  int mod;
+  if (!HdFx_InGameplay(&mod))
+    return;
+  int ext = (width - 256) / 2;
+  int cam_x = BG2HOFS_copy2 + bias_x, cam_y = BG2VOFS_copy2 + bias_y;
+  bool step = g_after_ice_step;
   DrawParticles(pixels, pitch, width, height, cam_x, cam_y, ext);
   if (g_config.fx_rain && IsRaining(mod)) {
     ApplyRain(pixels, pitch, width, height, cam_x, cam_y, ext, step);
@@ -2980,6 +3017,7 @@ void HdFx_Fog(uint8 *pixels, int pitch, int width, int height, int bias_x, int b
 
 bool HdMenu_IsOpen();
 bool Host_PauseDimmed();
+bool Host_Paused();
 
 static int32 *g_blur_buf, *g_blur_tmp;
 static int g_blur_cap;
@@ -3104,8 +3142,9 @@ void HdFx_MenuBlur(uint8 *pixels, int pitch, int width, int height) {
     return;
   }
   // con il menu opzioni aperto il gioco e' fermo: la dissolvenza va avanti
-  // comunque, un passo per ogni disegno
-  if (last_frame != frame_counter || HdMenu_IsOpen()) {
+  // comunque, un passo per ogni disegno; also during the pause, where the
+  // main loop keeps drawing while the blur fades out
+  if (last_frame != frame_counter || HdMenu_IsOpen() || Host_Paused()) {
     last_frame = frame_counter;
     float step = want ? 1.0f / 8 : -1.0f / 8;
     amount = amount + step > 1 ? 1 : amount + step < 0 ? 0 : amount + step;
@@ -3568,6 +3607,9 @@ static bool IsNotWalkingType(uint8 t) {
     0x14, 0x21,  // oggetti: grata della Citta' dei Ladri, leva dell'acqua
     0xba,        // vortice che porta Link nell'acqua
     0x3b,        // albero da colpire con lo scatto (sopra quello del fondale)
+    0xc2,        // falling rock: it touches the ground (z = 0) for one frame at
+                 // each bounce, and its soft shadow flashed while its game
+                 // shadow went; it always keeps the game shadow
   };
   for (int i = 0; i < (int)sizeof(kTypes); i++)
     if (kTypes[i] == t)

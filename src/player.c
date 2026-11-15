@@ -209,6 +209,8 @@ void Link_ControlHandler() {  // 87807f
   if (kill)
     link_give_damage = link_health_current;
   if (link_give_damage) {
+    bool fire_hit = g_hdburn_hurt_link;
+    g_hdburn_hurt_link = false;
     if (link_cape_mode) {
       link_give_damage = 0;
       link_auxiliary_state = 0;
@@ -216,6 +218,7 @@ void Link_ControlHandler() {  // 87807f
     } else {
       if (!link_disable_sprite_damage || kill) {
         uint8 dmg = link_give_damage;
+        uint8 hit = dmg;  // the hit's own damage, for the rumble even with "Vita infinita"
         link_give_damage = 0;
         // trucco "Vita infinita": Link e' colpito ma non perde cuori
         if (Cheats_InfiniteLife() && !kill)
@@ -229,10 +232,12 @@ void Link_ControlHandler() {  // 87807f
         Ancilla_Sfx2_Near(38);
         number_of_times_hurt_by_sprites++;
         uint8 new_dmg = link_health_current - dmg;
-        // vibrazione: il danno e' in ottavi di cuore
-        HdRumble(dmg >= 16 ? kRumble_HurtBig : dmg >= 8 ? kRumble_HurtMedium : kRumble_HurtSmall);
+        // rumble as in FSA (80277678): a heart or more 1 s, less 0.5 s,
+        // nothing without damage or when Link dies (damage in eighths of a heart);
+        // not for the flames of the fire (hd_burn.c), as decided for FSA
+        if (hit && new_dmg != 0 && new_dmg < 0xa8 && !fire_hit)
+          HdRumble(hit >= 8 ? kRumble_LinkStrong : kRumble_Link);
         if (new_dmg == 0 || new_dmg >= 0xa8) {
-          HdRumble(kRumble_Death);
           mapbak_TM = TM_copy;
           mapbak_TS = TS_copy;
           saved_module_for_menu = main_module_index;
@@ -968,17 +973,25 @@ after_pit:
   BYTE(link_z_coord_mirror) = link_z_coord;
 }
 
+// Burn and freeze interaction: frozen water (ice 0x0f, hd_burn.c) is a place
+// to land on when jumping off a ledge. The landing searches below only took
+// ground or water, so Link flew over the ice and fell in the water beyond it
+static uint8 LinkHop_IceToLandOn(void) {
+  return (enhanced_features0 & kFeatures0_BurnAndFreeze) ? tiledetect_icy_floor >> 4 : 0;
+}
+
 void LinkHop_FindTileToLandOnSouth() {  // 878ad1
   link_y_coord_original = link_y_coord;
   link_y_vel = link_y_coord - link_y_coord_safe_return_lo;
   for (;;) {
     link_y_coord += kLink_DoMoveXCoord_Outdoors_Helper2_y[link_last_direction_moved_towards];
     TileDetect_Movement_Y(link_last_direction_moved_towards);
-    uint8 k = tiledetect_normal_tiles | tiledetect_pit_tile | tiledetect_destruction_aftermath | tiledetect_thick_grass | tiledetect_deepwater;
+    uint8 k = tiledetect_normal_tiles | tiledetect_pit_tile | tiledetect_destruction_aftermath | tiledetect_thick_grass | tiledetect_deepwater |
+              LinkHop_IceToLandOn();
     if ((k & 7) == 7)
       break;
   }
-  if (tiledetect_deepwater & 7) {
+  if ((tiledetect_deepwater & 7) && !LinkHop_IceToLandOn()) {
     link_is_in_deep_water = 1;
     if (link_auxiliary_state != 4)
       link_auxiliary_state = 2;
@@ -1019,7 +1032,7 @@ void Link_HoppingHorizontally_FindTile_Y() {  // 878b9b
   TileDetect_Movement_Y(link_last_direction_moved_towards);
 
   uint8 tt = tiledetect_normal_tiles | tiledetect_destruction_aftermath | tiledetect_thick_grass |
-    tiledetect_deepwater;
+    tiledetect_deepwater | LinkHop_IceToLandOn();
 
   if ((tt & 7) != 7) {
     link_y_coord = link_y_coord_original;
@@ -1043,7 +1056,7 @@ void Link_HoppingHorizontally_FindTile_Y() {  // 878b9b
     link_z_coord_mirror = link_z_coord = link_y_coord - link_y_coord_original + z;
   }  // endif_1
 
-  if (tiledetect_deepwater & 7) {
+  if ((tiledetect_deepwater & 7) && !LinkHop_IceToLandOn()) {
     link_auxiliary_state = 2;
     Link_SetToDeepWater();
   }
@@ -1075,7 +1088,7 @@ uint8 Link_HoppingHorizontally_FindTile_X(uint8 o) {  // 878d2b
     TileDetect_Movement_X(link_last_direction_moved_towards);
 
     uint8 tt = tiledetect_normal_tiles | tiledetect_destruction_aftermath | tiledetect_thick_grass |
-      tiledetect_deepwater | tiledetect_pit_tile;
+      tiledetect_deepwater | tiledetect_pit_tile | LinkHop_IceToLandOn();
 
     if ((tt & 7) == 7) {
       if ((tiledetect_deepwater & 7) == 7) {
@@ -1168,12 +1181,13 @@ void LinkHop_FindLandingSpotDiagonallyDown() {  // 878e7b
     link_y_coord += kLink_Ledge_Func1_dy[link_last_direction_moved_towards];
     TileDetect_Movement_Y(link_last_direction_moved_towards);
     scratch = kLink_Ledge_Func1_bits[o];
-    uint8 k = tiledetect_normal_tiles | tiledetect_destruction_aftermath | tiledetect_thick_grass | tiledetect_deepwater;
+    uint8 k = tiledetect_normal_tiles | tiledetect_destruction_aftermath | tiledetect_thick_grass | tiledetect_deepwater |
+              LinkHop_IceToLandOn();
     if ((k & scratch) == scratch)
       break;
   }
 
-  if (tiledetect_deepwater & scratch) {
+  if ((tiledetect_deepwater & scratch) && !LinkHop_IceToLandOn()) {
     link_is_in_deep_water = 1;
     link_auxiliary_state = 2;
     link_some_direction_bits = link_direction_last;
@@ -1403,7 +1417,7 @@ void RepelDash() {  // 8791f1
     Link_ResetSwimmingState();
     AncillaAdd_DashTremor(29, 1);
     Prepare_ApplyRumbleToSprites();
-    HdRumble(kRumble_DashCrash);
+    HdRumble(kRumble_Link);
     if ((sound_effect_2 & 0x3f) != 27 && (sound_effect_2 & 0x3f) != 50)
       Ancilla_Sfx3_Near(3);
     LinkApplyTileRebound();
@@ -2262,6 +2276,16 @@ void Link_CheckForSwordSwing() {  // 879cd9
       if ((R14 & 0x30) == 0x30)
         return;
     }
+    // the stick turned around just before (g_stick_circle, as in the modern
+    // games): the spin attack at once, as at the end of a full charge
+    if (g_stick_circle && link_sword_type != 0 && link_sword_type != 0xff) {
+      g_stick_circle = false;
+      Link_ResetSwordAndItemUsage();
+      link_spin_attack_step_counter = 0;
+      g_hurricane_spin = 0;
+      Link_ActivateSpinAttack();
+      return;
+    }
     button_mask_b_y |= 0x80;
     HandleSwordSfxAndBeam();
     link_cant_change_direction |= 1;
@@ -2367,10 +2391,9 @@ static void HurricaneSpin_AddSpark() {  // GBA 0x80c2790: riusa la scia 0x2b o n
 }
 
 // Unique rule for a charge come to the top (sword, Hurricane Spin, and the
-// bow and hammer as in FSA): the same sound and rumble for all of them
+// bow and hammer as in FSA): the same sound for all of them (no rumble, as in FSA)
 static void Link_ChargeReady(void) {
   Ancilla_Sfx2_Near(55);
-  HdRumble(kRumble_SpinReady);
 }
 
 // Bow and hammer charged as in FSA (FsaItems), one count each: one a frame
@@ -2727,7 +2750,7 @@ void LinkItem_Hammer() {  // 879f7b
     g_hammer_charge = 0;
     TileDetect_MainHandler(3);
     Ancilla_AddHitStars(22, 0);
-    HdRumble(g_hammer_blow_charged ? kRumble_DashCrash : kRumble_Hammer);
+    HdRumble(g_hammer_blow_charged ? kRumble_LinkStrong : kRumble_Link);
     if (g_config.fsa_items) {
       // shock wave from between the two hit stars (Ancilla_AddHitStars)
       int hx, hy;
@@ -5275,12 +5298,13 @@ void Link_FindValidLandingTile_North() {  // 87c36c
   for (;;) {
     link_y_coord -= 16;
     TileDetect_Movement_Y(link_last_direction_moved_towards);
-    uint8 k = tiledetect_normal_tiles | tiledetect_destruction_aftermath | tiledetect_thick_grass | tiledetect_deepwater;
+    uint8 k = tiledetect_normal_tiles | tiledetect_destruction_aftermath | tiledetect_thick_grass | tiledetect_deepwater |
+              LinkHop_IceToLandOn();
     if ((k & 7) == 7)
       break;
   }
 
-  if (tiledetect_deepwater & 7) {
+  if ((tiledetect_deepwater & 7) && !LinkHop_IceToLandOn()) {
     link_auxiliary_state = 1;
     link_electrocute_on_touch = 0;
     link_is_in_deep_water = 1;

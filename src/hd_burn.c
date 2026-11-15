@@ -428,10 +428,19 @@ static void Queue(uint16 x, uint16 y, uint8 timer, uint16 fire) {
     g_pending[g_num_pending++] = (Pending){ x, y, timer, fire };
 }
 
+// It rains on the tile (its own area, not Link's: with the continuous world
+// the fire can be in a neighbouring area): fire has no effect there at all,
+// whatever starts it (Lantern, Fire Rod, Bombos, bombs, spreading flames),
+// and it does not melt the ice either
+bool HdBurn_RainAt(uint16 x, uint16 y) {
+  return !player_is_indoors && HdFx_IsRainingInArea(AreaOf(x, y));
+}
+
 // La tile (gia' allineata a 16) prende fuoco; se e' congelata il ghiaccio si
 // scioglie e la tile non brucia (ne' subito dopo, finche' e' bagnata)
 static bool StartBurning(uint16 x, uint16 y, bool spread, uint16 fire) {
-  if (!IsBurnable(x, y) || FindBurning(x, y) >= 0 || g_num_burning >= kHdMaxBurning || IsWet(x, y, fire))
+  if (!IsBurnable(x, y) || FindBurning(x, y) >= 0 || g_num_burning >= kHdMaxBurning || IsWet(x, y, fire) ||
+      HdBurn_RainAt(x, y))
     return false;
   int f = FindFrozen(x, y);
   if (f >= 0) {
@@ -469,6 +478,8 @@ static void FlameHitBox(SpriteHitBox *hb, uint16 x, uint16 y) {
   hb->r6_spr_xsize = hb->r7_spr_ysize = 12;
 }
 
+bool g_hdburn_hurt_link;
+
 // Link tocca le fiamme: si ferisce e rimbalza indietro come toccando uno
 // sprite di fuoco (Sprite_AttemptDamageToLinkPlusRecoil)
 static void HurtLink(uint16 x, uint16 y) {
@@ -490,6 +501,7 @@ static void HurtLink(uint16 x, uint16 y) {
   link_z_coord = 0;
   link_auxiliary_state = 1;
   link_give_damage = kLinkDamage;
+  g_hdburn_hurt_link = true;
 }
 
 // I nemici nelle fiamme vengono colpiti come dal fuoco della Bacchetta
@@ -594,7 +606,7 @@ static void VisibleTiles(uint16 *x0, uint16 *y0, int *w, int *h) {
 // apre a chiazze come a fine tempo, ma in quanto dura una fiamma
 static void MeltWater(uint16 x, uint16 y) {
   int f = FindFrozen(x, y);
-  if (f < 0 || !g_frozen[f].water || g_frozen[f].water == kHdIceMelting)
+  if (f < 0 || !g_frozen[f].water || g_frozen[f].water == kHdIceMelting || HdBurn_RainAt(x, y))
     return;
   HdBurnTile n = g_frozen[f];
   n.water = kHdIceMelting, n.age = kHdMeltStart;
@@ -610,10 +622,7 @@ uint16 HdBurn_NewFire(void) {
 bool HdBurn_Ignite(uint16 x, uint16 y, bool spread, uint16 fire) {
   if (!Enabled())
     return false;
-  MeltWater(x & ~0xf, y & ~0xf);
-  // sotto la pioggia il fuoco non attecchisce
-  if (HdFx_IsRainingOutdoors())
-    return false;
+  MeltWater(x & ~0xf, y & ~0xf);  // (neither under the rain: HdBurn_RainAt)
   return StartBurning(x & ~0xf, y & ~0xf, spread, fire);
 }
 
@@ -642,8 +651,6 @@ void HdBurn_IgniteScreen(void) {
   for (int y = 0; y < h; y += 16)
     for (int x = 0; x < w; x += 16)
       MeltWater(x0 + x, y0 + y);
-  if (HdFx_IsRainingOutdoors())
-    return;
   // all at once, and from there the fire goes on to the grass beyond the
   // view as any other fire (the user asked for it)
   uint16 fire = HdBurn_NewFire();
@@ -707,7 +714,7 @@ void HdBurn_Bombs(void) {
     Bombs_SetOff(OnFire, NULL, 1);
 }
 
-void HdBurn_FreezeScreen(void) {
+void HdBurn_FreezeScreen(bool water) {
   if (!Enabled())
     return;
   uint16 x0, y0;
@@ -715,7 +722,7 @@ void HdBurn_FreezeScreen(void) {
   VisibleTiles(&x0, &y0, &w, &h);
   for (int y = 0; y < h; y += 16)
     for (int x = 0; x < w; x += 16)
-      StartFreezing(x0 + x, y0 + y, kHdIceEther, false);
+      StartFreezing(x0 + x, y0 + y, water ? kHdIceEther : 0, false);
 }
 
 // Il cespuglio o l'erba appena tagliati o sollevati nel punto (x, y) (angolo

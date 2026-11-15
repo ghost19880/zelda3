@@ -663,6 +663,14 @@ static void DrawBand(Canvas *cv, int cx, int y, const char *t, int h2) {
 }
 
 void HdHud_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
+  // A new game starts with no magic: the bar shows from the first magic
+  // (a jar or a refill) and then stays, also empty; back to the title or the
+  // file select it waits again
+  static bool magic_seen;
+  if (main_module_index < 5)
+    magic_seen = false;
+  if (link_magic_power || link_magic_filler)
+    magic_seen = true;
   bool in_dialog = false, in_menu = InItemMenu();
   if (!ModernHudOn() || (!in_menu && !HudContext(&in_dialog)))
     return;
@@ -716,7 +724,7 @@ void HdHud_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
 
   // --- Magia: barra alta 8, larga quanto 10 cuori con la magia potenziata
   // e la meta' con quella normale
-  {
+  if (magic_seen) {
     // il verde comincia e finisce sui bordi dei cuori (10 cuori = 79 px:
     // 8 per cuore, l'ultimo largo 7); il contorno sporge di 2 px per lato
     int iw = link_magic_consumption >= 1 ? 79 : 40;

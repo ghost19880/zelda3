@@ -2,6 +2,7 @@
 #include "sprite.h"
 #include "hd_world.h"
 #include "hd_burn.h"
+#include "hd_rumble.h"
 #include "hd_fx.h"
 #include "tagalong.h"
 #include "ancilla.h"
@@ -3498,6 +3499,7 @@ void Sprite_54_Lanmolas(int k) {  // 85a3a2
       sprite_delay_main[k] = 127;
       sprite_ai_state[k] = 1;
       SpriteSfx_QueueSfx2WithPan(k, 0x35);
+      HdRumble(kRumble_Light);  // a Lanmola comes out of the ground
     }
     break;
   case 1:
@@ -7044,10 +7046,16 @@ static void GoldPotion_SetPalette(bool bottle) {
   const uint16 *c = kGoldPotion_Colors[bottle];
   int pal = 8 + (bottle ? kGoldPotion_BottlePal : kGoldPotion_SprPal);
   uint16 *p = main_palette_buffer + pal * 16 + 9;
-  if (memcmp(p, c, sizeof(kGoldPotion_Colors[0])) == 0)
+  uint16 *real = aux_palette_buffer + pal * 16 + 9;
+  // The game's fades move main_palette_buffer towards black (or back) from
+  // the real colours in aux_palette_buffer: with the real colours already
+  // there, main is set only while nothing is fading (before, the cauldron
+  // stayed lit on the black screen of the fade to a dark room)
+  bool real_set = memcmp(real, c, sizeof(kGoldPotion_Colors[0])) == 0;
+  if (real_set && (submodule_index != 0 || memcmp(p, c, sizeof(kGoldPotion_Colors[0])) == 0))
     return;
   memcpy(p, c, sizeof(kGoldPotion_Colors[0]));
-  memcpy(aux_palette_buffer + pal * 16 + 9, c, sizeof(kGoldPotion_Colors[0]));
+  memcpy(real, c, sizeof(kGoldPotion_Colors[0]));
   flag_update_cgram_in_nmi++;
 }
 
@@ -13843,6 +13851,7 @@ void BatCrash_SpawnDebris(int k) {  // 9af7e5
     GarnishSpawn_PyramidDebris(kPyramidDebris_X[j], kPyramidDebris_Y[j], kPyramidDebris_Xvel[j], kPyramidDebris_Yvel[j]);
   }
   sprite_delay_aux3[k] = 32;
+  HdRumble(kRumble_Light);  // Ganon's bat crashes into the Pyramid and the screen shakes
 }
 
 void RetreatBat_Draw(int k) {  // 9af833
@@ -15168,6 +15177,7 @@ void Sprite_D6_Ganon(int k) {  // 9d8eb4
         sprite_delay_main[k] = 96;
         sound_effect_ambient = 7;
         SpriteSfx_QueueSfx2WithPan(k, 0xc);
+        HdRumble(kRumble_Light);  // Ganon lands and the screen shakes
       }
       sprite_graphics[k] = kGanon_Gfx16[sprite_D[k]];
     }
@@ -17857,6 +17867,7 @@ void Boulder_OutdoorsMain(int k) {  // 9dd02a
     sprite_x_vel[k] = kBoulder_Xvel[j];
     sprite_D[k] = (j & 2) - 1;
     SpriteSfx_QueueSfx2WithPan(k, 0xb);
+    HdRumble_NearSprite(kRumble_Rock, k);  // a falling rock bounces near Link
 
   }
 }
@@ -19011,6 +19022,7 @@ advance:
       sprite_delay_aux4[k] = 32;
       sprite_G[k] = 0;
       SpriteSfx_QueueSfx2WithPan(k, 0xc);
+      HdRumble(kRumble_Light);  // the last Armos Knight crushes the ground and the screen shakes
     }
     break;
   }
@@ -20775,6 +20787,7 @@ void Sprite_A4_FallingIce(int k) {  // 9e9710
     if (!(sign8(old_z ^ sprite_z[k]) && sign8(sprite_z[k])))
       return;
     sprite_z[k] = 0;
+    HdRumble(kRumble_BossIce);  // Kholdstare's falling ice hits the floor
     if (!sprite_ai_state[k]) {
       sprite_state[k] = 0;
       IceBall_Split(k);

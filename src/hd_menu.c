@@ -998,7 +998,7 @@ static void Activate(int id, int dir) {
         return;
       // spenta, leggera, media, forte; una vibrazione di prova con la nuova forza
       g_config.rumble = (g_config.rumble + (dir < 0 ? 3 : 1)) & 3;
-      Host_Rumble(1.0f, 1.0f, 300);
+      Host_Rumble(1.0f, 0.0f, 500);  // as a game rumble (hd_rumble.c)
       return;
     }
     if (dir != 0)

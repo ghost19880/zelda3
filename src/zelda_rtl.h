@@ -96,4 +96,9 @@ enum {
   kJoypadH_AnyDir = 0xf,
 };
 
+// As in the modern games: the analog stick of a controller has just turned
+// around (main.c HandleGamepadAxisInput); a sword press now is a spin attack
+// at once (player.c Link_CheckForSwordSwing), which then clears it
+extern bool g_stick_circle;
+
 #endif  // ZELDA3_ZELDA_RTL_H_

@@ -130,7 +130,6 @@ static void Interrupt_NMI_AudioParts_Locked() {
     zelda_apu_write(APUI01, sound_effect_ambient);
     sound_effect_ambient = 0;
   }
-  HdRumble_Sound(sound_effect_1);
   zelda_apu_write(APUI02, sound_effect_1);
   zelda_apu_write(APUI03, sound_effect_2);
   sound_effect_1 = 0;

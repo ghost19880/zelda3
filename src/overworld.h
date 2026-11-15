@@ -152,6 +152,7 @@ void Overworld_GetPitDestination();
 void Overworld_UseEntrance();
 uint16 Overworld_ToolAndTileInteraction(uint16 x, uint16 y);
 int Overworld_BoomerangCut(uint16 px, uint16 py);
+int Overworld_ArrowCut(uint16 px, uint16 py);
 void Overworld_PickHammerSfx(uint16 a);
 uint16 Overworld_GetLinkMap16Coords(Point16U *xy);
 uint8 Overworld_HandleLiftableTiles(Point16U *pt_arg);

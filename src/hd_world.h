@@ -167,5 +167,11 @@ const float *HdWorld_WarpRowDx(void);
 // Colore (BGR a 15 bit) dello strato BG1 sommato a tutto (nebbia, pioggia)
 // nel pixel sx, sy dello schermo; -1 dove e' trasparente
 int HdWorld_OverlayColorAt(int sx, int sy);
+// Weather layer (rain, storm, fog) summed over a colour drawn after the PPU,
+// as the game does: Begin once per frame (false: no layer), Onto puts it
+// over colour c at screen pixel sx, sy, Off takes it away
+bool HdWorld_WeatherBegin(void);
+uint32 HdWorld_WeatherOnto(uint32 c, int sx, int sy);
+uint32 HdWorld_WeatherOff(uint32 c, int sx, int sy);
 
 #endif  // ZELDA3_HD_WORLD_H_

@@ -8,6 +8,7 @@
 #include "sprite.h"
 #include "hd_world.h"
 #include "hd_menu.h"
+#include "hd_rumble.h"
 #include "ancilla.h"
 #include "hd_burn.h"
 #include "player.h"
@@ -4074,6 +4075,11 @@ static int CutBushOrGrass(uint16 px, uint16 py) {
   return found;
 }
 
+// Charged arrow (FSA): only bushes and tall grass, no signs
+int Overworld_ArrowCut(uint16 px, uint16 py) {
+  return CutBushOrGrass(px, py);
+}
+
 int Overworld_BoomerangCut(uint16 px, uint16 py) {
   int r = CutBushOrGrass(px, py);
   uint16 pos;
@@ -4479,7 +4485,16 @@ void Overworld_AnimateEntrance() {  // 9bcac4
   flag_is_link_immobilized = j;
   flag_unk1 = j;
   nmi_disable_core_updates = j;
+  uint8 step = subsubmodule_index;
   kOverworld_EntranceSequence[j - 1]();
+  // The Palace of Darkness (opened by the monkey) and Ganon's Tower (its
+  // stairs coming down) do not shake the screen: a strong rumble at each boom
+  if ((j == 1 || j == 5) && subsubmodule_index != step && sound_effect_1 == 12)
+    HdRumble(kRumble_DungeonBoom);
+  // Misery Mire and Turtle Rock open with an earthquake: strong rumble for
+  // as long as the screen shakes (as the FSA gates that open)
+  if ((j == 3 || j == 4) && (bg1_x_offset | bg1_y_offset))
+    HdRumble(kRumble_DungeonOpen);
 }
 
 void Overworld_AnimateEntrance_PoD() {  // 9bcade

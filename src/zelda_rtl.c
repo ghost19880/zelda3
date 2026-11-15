@@ -512,8 +512,17 @@ static void ResolveSpritePositions(Ppu *ppu) {
   int link_z = LinkOam_DrawnHeight();
   if (link_z > 0)
     oy[n] = (int16)(link_y_coord - link_z - cy), ox[n++] = link_x - 8, link_refs = 2;
+  // An enemy that drew its pieces this frame and was then removed (an area
+  // change clears the old area's enemies after they drew) keeps its place:
+  // its pieces are still on the screen this frame. Without it they took the
+  // nearest object, 256 pixels away (a Death Mountain rock at the bottom of
+  // the screen showed for one frame at the top, without its shadow)
+  bool drew[16] = { 0 };
+  for (int i = 0; i < 128; i++)
+    if (g_sprite_oam_owner[i] < 16)
+      drew[g_sprite_oam_owner[i]] = true;
   for (int k = 0; k < 16; k++)
-    if (slot[k] = -1, sprite_state[k]) {
+    if (slot[k] = -1, sprite_state[k] || drew[k]) {
       slot[k] = n;
       oy[n] = (int16)((sprite_y_hi[k] << 8 | sprite_y_lo[k]) - sprite_z[k] - cy);
       ox[n++] = (int16)((sprite_x_hi[k] << 8 | sprite_x_lo[k]) - cx);
@@ -565,8 +574,14 @@ static void ResolveSpritePositions(Ppu *ppu) {
       k0 = slot[o], k1 = k0 + 1;
     else if (o == 0xff && g_ancilla_oam_frame[i] == (frame_counter | 0x100) && a < kAncilla_Slots && aslot[a] >= 0)
       k0 = aslot[a], k1 = k0 + 1;
-    int best = 1 << 30, y = yy;
-    for (int c = -1; c <= 1; c++)
+    // With a single reference (the piece's own owner) the search also goes
+    // two turns away: when Link enters the area below, the game camera jumps
+    // down by up to 224 pixels while the view stays, and a Death Mountain
+    // rock just above the view was then 290 pixels above the game camera,
+    // out of the -256..511 range: it showed 256 pixels lower, in mid-screen,
+    // for 3 frames
+    int best = 1 << 30, y = yy, turns = k1 - k0 == 1 ? 2 : 1;
+    for (int c = -turns; c <= turns; c++)
       for (int k = k0; k < k1; k++) {
         int d = abs(yy + c * 256 - oy[k]) + abs(x - ox[k]);
         if (d < best)
@@ -731,6 +746,7 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
       HdFx_MarkBackdrop(pixel_buffer, (int)pitch, frame_w, height, g_render_bias_x, g_render_bias_y);
       HdWater_Apply(pixel_buffer, (int)pitch, frame_w, height, g_render_bias_x, g_render_bias_y);
       HdFx_FrozenWater(pixel_buffer, (int)pitch, frame_w, height, g_render_bias_x, g_render_bias_y);
+      HdFx_AfterIce(pixel_buffer, (int)pitch, frame_w, height, g_render_bias_x, g_render_bias_y);
       HdFx_Fog(pixel_buffer, (int)pitch, frame_w, height, g_render_bias_x, g_render_bias_y);
       HdLight_FairyGlow(pixel_buffer, (int)pitch, frame_w, height);
       HdFx_Lightning(pixel_buffer, (int)pitch, frame_w, height);
