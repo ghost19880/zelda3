@@ -10,6 +10,14 @@
 // Frame di gioco dall'avvio (per le animazioni: frame_counter si azzera ogni 256)
 extern uint32 g_fx_frames;
 
+// Game frames run since *last, then *last = frame_counter: the unique rule for
+// every HD effect that moves while it is drawn. The Turbo key draws one game
+// frame in 16 (the replays in turbo one in 128) and screens above 60 Hz can
+// run more than one game frame between two draws: each effect takes this many
+// steps, so it keeps the game's pace. 0 while the game stands still; a jump
+// back (rewind, a loaded game) counts as one step.
+int HdFx_GameSteps(uint8 *last);
+
 // ---------------------------------------------------------------------------
 // Colori dei pixel dello schermo: 0xLLRRGGBB, LL = strato (2 = HUD, 4 e 6 =
 // sprite...). Le funzioni tengono lo strato del pixel

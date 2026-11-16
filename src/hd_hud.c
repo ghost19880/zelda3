@@ -215,9 +215,9 @@ static int ComputeAction(void) {
 static int StableAction(void) {
   static uint8 last_frame = 0xff;
   static int shown = kAction_None, candidate = kAction_None, count;
-  if (last_frame == frame_counter)
+  int steps = HdFx_GameSteps(&last_frame);  // (turbo: several game frames)
+  if (!steps)
     return shown;
-  last_frame = frame_counter;
   // Solo con Link nel normale controllo: durante transizioni fra schermate,
   // caricamenti e scene la scritta resta quella di prima
   if (submodule_index != 0) {
@@ -228,7 +228,7 @@ static int StableAction(void) {
   if (a == shown) {
     candidate = a, count = 0;
   } else if (a == candidate) {
-    if (++count >= 6)
+    if ((count += steps) >= 6)
       shown = a, count = 0;
   } else {
     candidate = a, count = 1;

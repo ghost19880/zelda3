@@ -985,6 +985,9 @@ static void CollectRevivalFairy(int width, int bias_x, int bias_y) {
 
 void HdLight_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y) {
   int mod;
+  // game frames since the last draw (HdFx_GameSteps: turbo)
+  static uint8 ambient_frame;
+  int steps = HdFx_GameSteps(&ambient_frame);
   if (g_config.dynamic_light)
     CollectRevivalFairy(width, bias_x, bias_y);
   g_hd_num_fire = 0;
@@ -1069,10 +1072,12 @@ void HdLight_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
     g_ambient = target;
     g_ambient_sub = target_sub;
   }
-  g_ambient += (target - g_ambient) * 0.06f;
+  // 6% of the way per game frame
+  float approach = steps == 1 ? 0.06f : 1.0f - powf(0.94f, (float)steps);
+  g_ambient += (target - g_ambient) * approach;
   if (fabsf(target - g_ambient) < 0.003f)
     g_ambient = target;
-  g_ambient_sub += (target_sub - g_ambient_sub) * 0.06f;
+  g_ambient_sub += (target_sub - g_ambient_sub) * approach;
   if (fabsf(target_sub - g_ambient_sub) < 0.5f)
     g_ambient_sub = target_sub;
   g_lit_dark_room = dark && g_ambient >= 0.999f && g_ambient_sub == 0.0f;

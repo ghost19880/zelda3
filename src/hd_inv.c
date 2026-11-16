@@ -895,13 +895,10 @@ void HdInv_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   if (open <= 0)
     return;
   // the page slide and the arrow push go on one step per game frame
-  if (g_last_frame != frame_counter) {
-    if (g_slide > 0)
-      g_slide--;
-    if (g_pop > 0)
-      g_pop--;
-    g_last_frame = frame_counter;
-  }
+  // (HdFx_GameSteps: also the game frames of the turbo)
+  int steps = HdFx_GameSteps(&g_last_frame);
+  g_slide = g_slide > steps ? g_slide - steps : 0;
+  g_pop = g_pop > steps ? g_pop - steps : 0;
   // even fade over the whole opening (an ease out made it all happen in
   // the first few frames)
   float e = open * open * (3 - 2 * open);

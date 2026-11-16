@@ -138,11 +138,11 @@ void HdFx_AreaEdgeLine(int line, bool before) {
 
 // Avanza le animazioni una volta per frame di gioco (non per ogni disegno)
 static uint8 g_last_frame;
-static bool NewGameFrame() {
-  if (g_last_frame == frame_counter)
-    return false;
-  g_last_frame = frame_counter;
-  return true;
+static uint8 g_step_frame;  // game frame of the step being taken (HdFx_AfterLight)
+int HdFx_GameSteps(uint8 *last) {
+  int n = (uint8)(frame_counter - *last);
+  *last = frame_counter;
+  return n > 128 ? 1 : n;
 }
 
 // ---------------------------------------------------------------------------
@@ -349,13 +349,16 @@ void HdFx_BoomerangGhost(int wx, int wy, int tile, uint8 flags) {
 
 static void DrawBoomerangGhosts(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y) {
   // the copies age with the game frames (not while the game is paused)
-  bool step = g_boom_ghost_frame != frame_counter;
-  g_boom_ghost_frame = frame_counter;
+  int steps = HdFx_GameSteps(&g_boom_ghost_frame);
   int order[kBoomGhosts], n = 0;
   for (int i = 0; i < kBoomGhosts; i++) {
     BoomGhost *g = &g_boom_ghost[i];
-    if (g->on && step && ++g->age >= kBoomGhostLife)
-      g->on = false;
+    if (g->on && steps) {
+      if (g->age + steps >= kBoomGhostLife)
+        g->on = false;
+      else
+        g->age += steps;
+    }
     if (!g->on)
       continue;
     // youngest first: the copies become sprite pixels, so where two overlap
@@ -690,16 +693,19 @@ void HdFx_HammerWaves(uint8 *pixels, int pitch, int width, int height, int bias_
   if (!HdFx_InGameplay(&mod))
     return;
   // the blows age with the game frames (not while the game is paused)
-  bool step = g_hammer_wave_frame != frame_counter;
-  g_hammer_wave_frame = frame_counter;
+  int steps = HdFx_GameSteps(&g_hammer_wave_frame);
   static uint32 src[kHammerWaveBox * kHammerWaveBox];
   int ext = (width - 256) / 2;
   int cam_x = BG2HOFS_copy2 + bias_x, cam_y = BG2VOFS_copy2 + bias_y;
   FindBlasts(cam_x, cam_y, ext);
   for (int i = 0; i < kHammerWaves; i++) {
     HammerWave *w = &g_hammer_wave[i];
-    if (w->on && step && ++w->age >= (w->charged ? kChargedLife : kHammerPuffLife))
-      w->on = false;
+    if (w->on && steps) {
+      if (w->age + steps >= (w->charged ? kChargedLife : kHammerPuffLife))
+        w->on = false;
+      else
+        w->age += steps;
+    }
     if (!w->on)
       continue;
     if (w->charged) {
@@ -997,7 +1003,7 @@ static void SpawnFuseSmoke(void) {
       continue;  // in deep water the fuse is out
     float tx = (float)(ancilla_x_hi[k] << 8 | ancilla_x_lo[k]) + 6;
     float ty = (float)(ancilla_y_hi[k] << 8 | ancilla_y_lo[k]) - z - 6;
-    if ((frame_counter + k) % kFusePuffEvery == 0) {
+    if ((g_step_frame + k) % kFusePuffEvery == 0) {
       Particle *p = NewParticle();
       if (!p)
         return;
@@ -1278,12 +1284,14 @@ static bool PortalsPaused(void) {
   return submodule_index && !HdFx_EndingScene();
 }
 
-static void StepPortals(int cam_x, int cam_y, int ext, int width, int height) {
+// find: look for the portals on screen (first of the steps of one draw)
+static void StepPortals(int cam_x, int cam_y, int ext, int width, int height, bool find) {
   if (PortalsPaused()) {
     g_num_portals = 0;  // area changes and warps: no glow, no sparks
     return;
   }
-  FindPortals(cam_x, cam_y, ext, width, height);
+  if (find)
+    FindPortals(cam_x, cam_y, ext, width, height);
   for (int i = 0; i < g_num_portals; i++) {
     Particle *p;
     if (Rand01() >= 0.06f || !(p = NewParticle()))
@@ -1494,7 +1502,7 @@ static void SpawnDust(float x, float y, int w, int h) {
 // (x0, y0 sullo schermo, w x h pixel): dritto da nord a sud, piu' forte
 // vicino al pavimento
 static void ApplyFloorShaft(uint8 *pixels, int pitch, int width, int height, float x0, float y0, int w, int h,
-                            float t, bool spawn, int cam_x, int cam_y, int ext) {
+                            float t, int spawn, int cam_x, int cam_y, int ext) {
   const int kTop = 72;  // altezza del fascio sopra il riquadro
   for (int dy = -kTop; dy < h; dy++) {
     int y = (int)y0 + dy;
@@ -1515,11 +1523,12 @@ static void ApplyFloorShaft(uint8 *pixels, int pitch, int width, int height, flo
       AddColor(&row[x], 255, 240, 205, (dy < 0 ? 0.24f : 0.12f) * fall * edge * streak);
     }
   }
-  if (spawn && Rand01() < 0.10f)
-    SpawnDust(x0 - ext + cam_x, y0 + cam_y - kTop + 8, w, kTop + h - 16);
+  for (int s = 0; s < spawn; s++)
+    if (Rand01() < 0.10f)
+      SpawnDust(x0 - ext + cam_x, y0 + cam_y - kTop + 8, w, kTop + h - 16);
 }
 
-static void ApplyWindowRays(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext, bool spawn) {
+static void ApplyWindowRays(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext, int spawn) {
   int room = HdFx_LoadedRoom();
   bool moved = g_bg1_moves;
   TrackMovingBg1(room);
@@ -1566,8 +1575,9 @@ static void ApplyWindowRays(uint8 *pixels, int pitch, int width, int height, int
       }
     }
     // pulviscolo che fluttua nel fascio (in coordinate del mondo)
-    if (spawn && Rand01() < 0.10f)
-      SpawnDust(x0 - ext + cam_x, y0 + cam_y + 8, kW, kLen - 16);
+    for (int s = 0; s < spawn; s++)
+      if (Rand01() < 0.10f)
+        SpawnDust(x0 - ext + cam_x, y0 + cam_y + 8, kW, kLen - 16);
   }
 }
 
@@ -2053,7 +2063,7 @@ bool HdFx_SunnyOutdoors(void) {
 }
 
 static void ApplyRain(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext,
-                      bool step) {
+                      int steps) {
   if (!g_drops_init) {
     for (int i = 0; i < kNumDrops; i++) {
       RainDrop *d = &g_drops[i];
@@ -2065,17 +2075,19 @@ static void ApplyRain(uint8 *pixels, int pitch, int width, int height, int cam_x
   }
   for (int i = 0; i < kNumDrops; i++) {
     RainDrop *d = &g_drops[i];
-    if (step) {
+    for (int s = 0; s < steps; s++) {
       d->y += d->speed, d->x -= d->speed * 0.35f;
       // every drop falls to its own point of the ground and splashes there,
       // where its head touches it; then it starts again from the top
       if (d->y >= d->land) {
         float over = d->y - d->land;
-        Particle *p = NewParticle();
+        // a splash of an earlier step of this draw is already that much older
+        int age = steps - 1 - s;
+        Particle *p = age < 14 ? NewParticle() : NULL;
         if (p) {
           p->kind = 2;
           p->x = d->x + over * 0.35f - ext + cam_x, p->y = d->land + cam_y;
-          p->life = 14;
+          p->life = 14, p->age = (uint16)age;
         }
         // the point of the ground is chosen first, even over the whole
         // screen; the drop starts above it, to the right by its slant
@@ -2098,12 +2110,12 @@ static void ApplyRain(uint8 *pixels, int pitch, int width, int height, int cam_x
   }
 }
 
-static void StepLightning(bool step) {
+static void StepLightning(int steps) {
   // Con l'effetto attivo il gioco non fa piu' i suoi lampeggi rapidi
   // (OverworldOverlay_HandleRain): resta un solo lampo, sul tuono, che si
   // accende in pochi frame e si spegne lentamente.
-  if (step) {
-    if (frame_counter == 36)
+  for (int s = 0; s < steps; s++) {
+    if ((uint8)(frame_counter - (steps - 1 - s)) == 36)
       g_flash_rise = true;
     if (g_flash_rise) {
       g_flash += 0.25f;
@@ -2616,7 +2628,7 @@ void HdFx_FrozenWater(uint8 *pixels, int pitch, int width, int height, int bias_
 }
 
 
-static void ApplyBurning(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext, bool step) {
+static void ApplyBurning(uint8 *pixels, int pitch, int width, int height, int cam_x, int cam_y, int ext, int steps) {
   const HdBurnTile *tiles;
   int n = HdBurn_GetFrozen(&tiles);
   if (n) {
@@ -2642,8 +2654,8 @@ static void ApplyBurning(uint8 *pixels, int pitch, int width, int height, int ca
     int sx = s->x - cam_x + ext, sy = s->y - cam_y;
     if (TileNearScreen(sx, sy, width, height))
       DrawScorchTile(pixels, pitch, width, height, sx, sy, s->seed, 0.62f - 0.10f * k);
-    // fumo appena il fuoco si spegne
-    if (step && live && s->age == 1) {
+    // fumo appena il fuoco si spegne (went out in one of the steps of this draw)
+    if (live && s->age >= 1 && s->age <= steps) {
       for (int j = 0; j < 4; j++) {
         Particle *p = NewParticle();
         if (!p)
@@ -2676,7 +2688,9 @@ static void ApplyBurning(uint8 *pixels, int pitch, int width, int height, int ca
     // la pianta si annerisce mentre brucia
     DrawScorchTile(pixels, pitch, width, height, sx, sy, b->seed, 0.55f * b->age / kHdBurnTime);
     DrawFlamesTile(pixels, pitch, width, height, sx, sy, b, b->y + 15 < link_feet);
-    if (step && live && Rand01() < 0.05f) {
+    for (int s = 0; s < steps && live; s++) {
+      if (Rand01() >= 0.05f)
+        continue;
       Particle *p = NewParticle();
       if (p) {
         p->kind = 3;
@@ -2688,19 +2702,23 @@ static void ApplyBurning(uint8 *pixels, int pitch, int width, int height, int ca
   }
 }
 
-static bool g_after_ice_on, g_after_ice_step;  // (HdFx_AfterIce)
+static bool g_after_ice_on;  // (HdFx_AfterIce)
+static int g_after_ice_steps;
 
 void HdFx_AfterLight(uint8 *pixels, int pitch, int width, int height, int bias_x, int bias_y) {
   int mod;
   if (!HdFx_InGameplay(&mod)) {
     g_num_particles = 0;
+    g_last_frame = frame_counter;  // back in the game: no catching up
     return;
   }
   DrawBoomerangGhosts(pixels, pitch, width, height, bias_x, bias_y);
   int ext = (width - 256) / 2;
   int cam_x = BG2HOFS_copy2 + bias_x, cam_y = BG2VOFS_copy2 + bias_y;
-  bool step = NewGameFrame();
-  if (step) {
+  // one step per game frame run since the last draw (HdFx_GameSteps: turbo)
+  int steps = HdFx_GameSteps(&g_last_frame);
+  for (int s = 0; s < steps; s++) {
+    g_step_frame = (uint8)(frame_counter - (steps - 1 - s));
     g_fx_frames++;
     UpdateParticles();
     if (g_config.fx_heat)
@@ -2710,25 +2728,25 @@ void HdFx_AfterLight(uint8 *pixels, int pitch, int width, int height, int bias_x
     if (g_config.fsa_items && (mod == 9 || mod == 7))
       SpawnFuseSmoke();
     if (g_config.fx_heat && (mod == 9 || mod == 7))
-      StepPortals(cam_x, cam_y + 1, ext, width, height);
+      StepPortals(cam_x, cam_y + 1, ext, width, height, s == 0);
     else
       g_num_portals = 0;
   }
   // window light, ice and scorch sit on background tiles: screen row 0 is
   // background row 1 (HdWorld_Composite); sprites and particles have no +1
   if (g_config.fx_window_rays && mod == 7)
-    ApplyWindowRays(pixels, pitch, width, height, cam_x, cam_y + 1, ext, step);
+    ApplyWindowRays(pixels, pitch, width, height, cam_x, cam_y + 1, ext, steps);
   if (g_config.fx_item_glow)
     ApplyItemGlow(pixels, pitch, width, height, cam_x, cam_y, ext);
   KeepCrystalUnpainted(pixels, pitch, width, height, cam_x, cam_y, ext);
   TrinexxBodyAsSprite(pixels, pitch, width, height);
   if (HdFx_OutdoorScene(mod))
-    ApplyBurning(pixels, pitch, width, height, cam_x, cam_y + 1, ext, step);
+    ApplyBurning(pixels, pitch, width, height, cam_x, cam_y + 1, ext, steps);
   if (g_config.fx_heat && (mod == 9 || mod == 7))
     ApplyPortals(pixels, pitch, width, height, cam_x, cam_y + 1, ext);
   if (g_config.fx_heat && mod == 11)
     ApplyCampfireGlow(pixels, pitch, width, height, cam_x, cam_y, ext);
-  g_after_ice_step = step;
+  g_after_ice_steps = steps;
   g_after_ice_on = true;
 }
 
@@ -2745,11 +2763,11 @@ void HdFx_AfterIce(uint8 *pixels, int pitch, int width, int height, int bias_x, 
     return;
   int ext = (width - 256) / 2;
   int cam_x = BG2HOFS_copy2 + bias_x, cam_y = BG2VOFS_copy2 + bias_y;
-  bool step = g_after_ice_step;
+  int steps = g_after_ice_steps;
   DrawParticles(pixels, pitch, width, height, cam_x, cam_y, ext);
   if (g_config.fx_rain && IsRaining(mod)) {
-    ApplyRain(pixels, pitch, width, height, cam_x, cam_y, ext, step);
-    StepLightning(step);
+    ApplyRain(pixels, pitch, width, height, cam_x, cam_y, ext, steps);
+    StepLightning(steps);
   } else {
     g_flash = 0, g_flash_rise = false;
   }
@@ -2938,11 +2956,9 @@ void HdFx_Fog(uint8 *pixels, int pitch, int width, int height, int bias_x, int b
       }
   }
   // la nebbia si muove solo mentre si gioca (non nei menu)
-  if (g_fog_last_frame != frame_counter) {
-    g_fog_last_frame = frame_counter;
-    if (main_module_index == 9 || main_module_index == 11)
-      g_fog_t++;
-  }
+  int fog_steps = HdFx_GameSteps(&g_fog_last_frame);
+  if (main_module_index == 9 || main_module_index == 11)
+    g_fog_t += fog_steps;
   float t = (float)g_fog_t;
   // centro di Link sullo schermo
   float lx = link_x_coord + 8 - cam_x, ly = link_y_coord + 12 - (int16)link_z_coord - cam_y;

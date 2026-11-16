@@ -1290,9 +1290,15 @@ static int g_base_x[kMaxBases], g_base_y[kMaxBases], g_num_bases;
 
 static bool g_small_mist;  // getti delle bocche nei labirinti: sbuffi piccoli e radi
 
-static void UpdateMist(bool step) {
-  if (!step)
-    return;
+static void UpdateMistStep(void);
+
+// one step per game frame run since the last draw (HdFx_GameSteps: turbo)
+static void UpdateMist(int steps) {
+  for (int s = 0; s < steps; s++)
+    UpdateMistStep();
+}
+
+static void UpdateMistStep(void) {
   float scale = g_small_mist ? 0.45f : 1.0f;
   int n = 0;
   for (int i = 0; i < g_num_mist; i++) {
@@ -2540,10 +2546,8 @@ void HdWater_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
   if (g_zenv.ppu->forcedBlank)
     return;  // schermo nero
   g_night = !player_is_indoors && sram_progress_indicator < 2 && !(overworld_screen_index & 0x40);
-  bool step = g_last_frame != frame_counter;
-  g_last_frame = frame_counter;
-  if (step)
-    g_time++;
+  int step = HdFx_GameSteps(&g_last_frame);  // game frames since the last draw (turbo)
+  g_time += step;
   float t = (float)g_time;
   int ext = (width - 256) / 2;
   // (screen row 0 is background row 1, as in HdWorld_Composite)
