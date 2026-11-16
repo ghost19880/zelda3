@@ -43,8 +43,9 @@ static const uint16 kDefaultKbdControls[kKeys_Total] = {
   _(SDLK_w), _(SDLK_o), S(SDLK_w), C(SDLK_e),
   // ClearKeyLog, StopReplay, Fullscreen, Reset, Pause, PauseDimmed, Turbo, ReplayTurbo, WindowBigger, WindowSmaller, DisplayPerf, ToggleRenderer
   _(SDLK_k), _(SDLK_l), A(SDLK_RETURN), C(SDLK_r), S(SDLK_p), _(SDLK_p), _(SDLK_TAB), _(SDLK_t), N, N, _(SDLK_f), _(SDLK_r),
-  // VolumeUp, VolumeDown, HdMenu, CheatKillLink
-  N, N, _(SDLK_ESCAPE), C(SDLK_k),
+  // VolumeUp, VolumeDown, HdMenu, CheatKillLink, Rewind (M only when no other
+  // command has it: RegisterDefaultKeys comes after the ini and a taken key is skipped)
+  N, N, _(SDLK_ESCAPE), C(SDLK_k), _(SDLK_m),
 };
 #undef _
 #undef A
@@ -65,7 +66,7 @@ static const KeyNameId kKeyNameId[] = {
   S(CheatLife), S(CheatKeys), S(CheatEquipment), S(CheatWalkThroughWalls),
   S(ClearKeyLog), S(StopReplay), S(Fullscreen), S(Reset),
   S(Pause), S(PauseDimmed), S(Turbo), S(ReplayTurbo), S(WindowBigger), S(WindowSmaller), S(VolumeUp), S(VolumeDown), S(DisplayPerf), S(ToggleRenderer),
-  S(HdMenu), S(CheatKillLink),
+  S(HdMenu), S(CheatKillLink), S(Rewind),
 };
 #undef S
 #undef M
@@ -357,7 +358,7 @@ static const PlainOption kPlainOptions[] = {
   OPT(4, "FsaItems", fsa_items), OPT(4, "EnchantedRocks", enchanted_rocks), OPT(4, "LakeClearing", lake_clearing),
   BIT(4, "GbaMinorFixes", GbaMinorFixes), BIT(4, "BirdTravelPoint9", BirdTravel9),
   BIT(4, "FastTransitions", FastTransitions), BIT(4, "ContinuousWorld", ContinuousWorld),
-  BIT(4, "ModernHud", ModernHud), BIT(4, "DungeonNames", DungeonNames),
+  BIT(4, "ModernHud", ModernHud), OPT(4, "ModernItemMenu", modern_items), BIT(4, "DungeonNames", DungeonNames),
   BIT(4, "ExtendedInventory", ExtendedInventory), BIT(4, "ImprovedWorldMap", ImprovedWorldMap),
   BIT(4, "ImprovedDungeonMap", ImprovedDungeonMap), BIT(4, "ProgressiveMap", ProgressiveMap),
   BIT(4, "BurnAndFreezeInteraction", BurnAndFreeze),
@@ -821,6 +822,14 @@ void Config_ResetControlsToDefault() {
   int menu_key = kDefaultKbdControls[kKeys_HdMenu];
   KeyMap_Assign(kKeys_HdMenu, menu_key);
   Config_SetPadButtonForCmd(kKeys_HdMenu, kGamepadBtn_R3);
+  // rewind: M if no other command has it, otherwise no key; no pad button
+  int rewind_key = kDefaultKbdControls[kKeys_Rewind];
+  int owner = KeyMapHash_Find(rewind_key);
+  if (owner == 0 || owner == kKeys_Rewind)
+    KeyMap_Assign(kKeys_Rewind, rewind_key);
+  else
+    KeyMapHash_Rebuild(kKeys_Rewind, -1);
+  GamepadMap_Rebuild(kKeys_Rewind, -1);
 }
 
 static bool LineIsKey(const char *line, const char *key) {

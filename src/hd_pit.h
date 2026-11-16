@@ -12,5 +12,9 @@ void HdPit_Apply(uint8 *pixels, int pitch, int width, int height);
 
 // After loading a quick save (zelda_rtl.c LoadSnesState)
 void HdPit_ResetAfterLoad(void);
+// Rewind and quick saves: what moves with time (zelda_rtl.c HdAnim_IO),
+// saved and loaded with the game
+#include "snes/saveload.h"
+void HdPit_RewindIO(SaveLoadFunc *func, void *ctx);
 
 #endif  // ZELDA3_HD_PIT_H_

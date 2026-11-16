@@ -245,6 +245,7 @@
     <ClCompile Include="src\hd_rumble.c" />
     <ClCompile Include="src\hd_art.c" />
     <ClCompile Include="src\hd_hud.c" />
+    <ClCompile Include="src\hd_inv.c" />
     <ClCompile Include="src\hd_world.c" />
     <ClCompile Include="src\hd_trans.c" />
     <ClCompile Include="src\hud.c" />

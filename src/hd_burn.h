@@ -46,6 +46,12 @@ void HdBurn_HurtSpritesInArea(uint8 area);
 // Spegne tutto e dimentica le tile annerite e congelate: entrando in una casa
 // o caricando un salvataggio il gioco fa ricrescere tutti i cespugli
 void HdBurn_Reset(void);
+// Before loading a game: forgets everything without touching the loaded RAM
+void HdBurn_Forget(void);
+// Fire and ice in quick saves and in the rewind: saves or loads (HdBurn_Loaded after)
+#include "snes/saveload.h"
+void HdBurn_SaveLoad(SaveLoadFunc *func, void *ctx);
+void HdBurn_Loaded(void);
 // Set when the flames hurt Link (cleared by Link_ControlHandler): this damage
 // does not rumble
 extern bool g_hdburn_hurt_link;

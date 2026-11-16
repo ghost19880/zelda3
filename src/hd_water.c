@@ -250,9 +250,11 @@ static float Noise(float x, float y) {
   return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
 }
 
+static uint32 g_water_rng = 0x9e3779b9u;  // (HdWater_RewindIO)
 static float Rand01(void) {
-  static uint32 s = 0x9e3779b9u;
+  uint32 s = g_water_rng;
   s ^= s << 13, s ^= s >> 17, s ^= s << 5;
+  g_water_rng = s;
   return (s & 0xffffff) * (1.0f / 16777216.0f);
 }
 
@@ -581,6 +583,11 @@ bool HdWater_IsTroughPair(int e, int b) {
     return false;
   int t = e & 0x3ff;
   return (t == 0x126 || t == 0x127) && (b & 0x3ff) == t + 0x10;
+}
+
+bool HdWater_IsRockEntry(int e) {
+  int t = e & 0x3ff;
+  return e >= 0 && (e >> 10 & 7) == 7 && (t == 0x1e1 || t == 0x1cf);
 }
 
 static void FindTroughs(void) {
@@ -1642,8 +1649,7 @@ static void FindSmallIslands(void) {
   // other (circle of rocks)
   for (int cy = 0; cy < kMaxCellsY; cy++)
     for (int cx = 0; cx < kMaxCellsX; cx++) {
-      int e = g_cell_entry[cy][cx], t = e & 0x3ff;
-      if (e >= 0 && (e >> 10 & 7) == 7 && (t == 0x1e1 || t == 0x1cf))
+      if (HdWater_IsRockEntry(g_cell_entry[cy][cx]))
         g_cell_own[cy][cx] = 1;
     }
   DilateCells(g_cell_near1, g_cell_own, 1);
@@ -2759,4 +2765,13 @@ void HdWater_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
   // 4: nebbia alla base delle cascate
   UpdateMist(step);
   DrawMist(pixels, pitch, width, height, cam_x, cam_y, ext, dark_shore);
+}
+
+// Rewind and quick saves (zelda_rtl.c HdAnim_IO): the waves and the mist of the waterfalls
+// go back with the game; the same calls save and load
+void HdWater_RewindIO(SaveLoadFunc *func, void *ctx) {
+#define F(v) func(ctx, &v, sizeof(v));
+  F(g_water_rng) F(g_last_frame) F(g_time) F(g_mist_place)
+  F(g_mist) F(g_num_mist) F(g_base_x) F(g_base_y) F(g_num_bases) F(g_small_mist)
+#undef F
 }

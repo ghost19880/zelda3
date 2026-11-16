@@ -886,3 +886,11 @@ void HdPit_ResetAfterLoad(void) {
   for (int i = 0; i < kEntries; i++)
     g_rooms[i].room = -1;
 }
+
+// Rewind and quick saves (zelda_rtl.c HdAnim_IO): the trail in the Swamp Palace pit goes
+// back with the game; the same calls save and load
+void HdPit_RewindIO(SaveLoadFunc *func, void *ctx) {
+#define F(v) func(ctx, &v, sizeof(v));
+  F(g_mire_hx) F(g_mire_hy) F(g_mire_frame)
+#undef F
+}

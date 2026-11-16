@@ -20,6 +20,7 @@
 #include "hd_water.h"
 #include "hd_pit.h"
 #include "hd_hud.h"
+#include "hd_inv.h"
 #include "hd_art.h"
 #include "hud_it.h"
 #include "assets.h"
@@ -322,6 +323,12 @@ static void FormatFileTime(const char *name, char *buf, size_t size) {
     snprintf(buf, size, "%02d/%02d  %02d:%02d", tm->tm_mday, tm->tm_mon + 1, tm->tm_hour, tm->tm_min);
 }
 
+// Rewind held (main.c): its card stays on screen while the game goes back
+static bool g_rewinding;
+void HdMenu_SetRewinding(bool on) {
+  g_rewinding = on;
+}
+
 void HdMenu_ShowMessage(const char *msg) {
   snprintf(g_message, sizeof(g_message), "%s", Tr(msg));
   g_message_timer = 150;
@@ -461,6 +468,8 @@ static const char *Tr(const char *it) {
     { "(al riavvio)", "(on restart)" },
     { "Menu opzioni", "Options menu" },
     { "Ripristina tasti predefiniti", "Restore default keys" },
+    { "Riavvolgi", "Rewind" },
+    { "Riavvolgimento", "Rewinding" },
     { "Vibrazione del controller", "Controller rumble" },
     { "Azione sugli slot", "Slot action" },
     { "Salva", "Save" },
@@ -588,6 +597,7 @@ static void SaveSettings() {
   AddIni(v, &n, "[Features]", "ItemOnX", "%d", g_config.item_on_x);
   AddIni(v, &n, "[Features]", "ItemOnLR", "%d", g_config.item_on_lr);
   AddIni(v, &n, "[Features]", "GbaHud", "%d", g_config.gba_hud);
+  AddIni(v, &n, "[Features]", "ModernItemMenu", "%d", g_config.modern_items);
   // La lingua si scrive solo se cambiata dal menu (altrimenti resta quella
   // dell'ini, anche de, fr...)
   if (g_lang_dirty)
@@ -619,6 +629,11 @@ static void SaveSettings() {
     AddIniStr(v, &n, "[GamepadMap]", "Controls", buf);
     int b = Config_GetPadButtonForCmd(kKeys_HdMenu);
     AddIniStr(v, &n, "[GamepadMap]", "HdMenu", b >= 0 ? Config_PadButtonName(b) : "");
+    int rk = Config_GetKeyForCmd(kKeys_Rewind);
+    Config_KeyName(rk, name, sizeof(name));
+    AddIniStr(v, &n, "[KeyMap]", "Rewind", rk ? name : "");
+    b = Config_GetPadButtonForCmd(kKeys_Rewind);
+    AddIniStr(v, &n, "[GamepadMap]", "Rewind", b >= 0 ? Config_PadButtonName(b) : "");
   }
   if (!Config_WriteIniValues(v, n))
     fprintf(stderr, "Impossibile salvare le impostazioni in %s\n", Config_GetFilename());
@@ -798,6 +813,7 @@ static void BuildItemsRaw(void) {
     AddGfx(23, kGfxInGame);
     AddHeader("Interfaccia");
     AddFeature(kFeatures0_ModernHud);
+    AddItem(111, "Menu oggetti moderno", YesNo(g_config.modern_items));
     AddItem(110, "HUD GBA", YesNo(g_config.gba_hud));
     AddFeature(kFeatures0_DungeonNames);
     AddGfx(15, kGfxInGame);
@@ -812,7 +828,9 @@ static void BuildItemsRaw(void) {
     AddFeature(kFeatures0_SwitchLR);
     AddItem(106, "Tasti L e R per gli oggetti", YesNo(g_config.item_on_lr));
     AddFeature(kFeatures0_SwitchLRLimit);
-    AddFeature(kFeatures0_ExtendedInventory);
+    // the modern item menu always has the extended inventory
+    if (!g_config.modern_items)
+      AddFeature(kFeatures0_ExtendedInventory);
     AddHeader("Movimento e viaggi");
     AddFeature(kFeatures0_TurnWhileDashing);
     AddItem(102, "Immersione con le pinne", YesNo(g_config.flipper_dive));
@@ -857,6 +875,11 @@ static void BuildItemsRaw(void) {
     if (snprintf(buf, sizeof(buf), "%s   -   %s", buf2, Config_PadButtonName(Config_GetPadButtonForCmd(kKeys_HdMenu))) < 0)
       buf[0] = 0;
     AddItem(12, "Menu opzioni", buf);
+    // rewind as in the emulators: held, the game goes back (up to a minute)
+    Config_KeyName(Config_GetKeyForCmd(kKeys_Rewind), buf2, sizeof(buf2));
+    if (snprintf(buf, sizeof(buf), "%s   -   %s", buf2, Config_PadButtonName(Config_GetPadButtonForCmd(kKeys_Rewind))) < 0)
+      buf[0] = 0;
+    AddItem(15, "Riavvolgi", buf);
     AddItem(14, "Vibrazione del controller", kLevelNames[g_config.rumble & 3]);
     AddItem(13, "Ripristina tasti predefiniti", NULL);
     break;
@@ -954,6 +977,8 @@ static void Activate(int id, int dir) {
       g_config.stuck_arrows = !g_config.stuck_arrows;
     } else if (id == 104) {
       g_config.hurricane_spin = !g_config.hurricane_spin;
+    } else if (id == 111) {
+      g_config.modern_items = !g_config.modern_items;
     } else if (id == 110) {
       // GBA HUD or modern HUD, not both
       g_config.gba_hud = !g_config.gba_hud;
@@ -1095,6 +1120,11 @@ void HdMenu_SetContinuousWorld(bool on) {
   HdMenu_ShowMessage(on ? "Mondo continuo acceso dal salvataggio" : "Mondo continuo spento dal salvataggio");
 }
 
+// Command of the Controls row waiting for a key or button
+static int CaptureCmd(int id) {
+  return id == 12 ? kKeys_HdMenu : id == 15 ? kKeys_Rewind : kKeys_Controls + id;
+}
+
 bool HdMenu_HandleKey(int code, int mod, bool pressed) {
   int cmd = FindCmdForSdlKey(code, mod);
   if (pressed)
@@ -1114,7 +1144,7 @@ bool HdMenu_HandleKey(int code, int mod, bool pressed) {
     } else if (code != SDLK_LSHIFT && code != SDLK_RSHIFT && code != SDLK_LCTRL &&
                code != SDLK_RCTRL && code != SDLK_LALT && code != SDLK_RALT &&
                code != SDLK_COMMA) {  // la virgola separa i tasti nella riga Controls dell'ini
-      Config_SetKeyForCmd(g_capture == 12 ? kKeys_HdMenu : kKeys_Controls + g_capture, code, mod);
+      Config_SetKeyForCmd(CaptureCmd(g_capture), code, mod);
       g_controls_dirty = true;
       g_capture = -1;
     }
@@ -1152,7 +1182,7 @@ bool HdMenu_HandlePadButton(int button, bool pressed) {
     if (button == kGamepadBtn_Back) {
       g_capture = -1;
     } else {
-      Config_SetPadButtonForCmd(g_capture == 12 ? kKeys_HdMenu : kKeys_Controls + g_capture, button);
+      Config_SetPadButtonForCmd(CaptureCmd(g_capture), button);
       g_controls_dirty = true;
       g_capture = -1;
     }
@@ -1199,12 +1229,13 @@ static void DrawPanel(Canvas *cv, int x, int y, int w, int h, uint32 color, floa
 // Short message: the same card as the hints, on their row or just above them
 // when they are shown (it does not cover them)
 static void DrawMessage(Canvas *cv) {
-  if (!g_message_timer || !g_message[0])
+  const char *msg = g_rewinding ? Tr("Riavvolgimento") : g_message;
+  if (!g_rewinding && (!g_message_timer || !g_message[0]))
     return;
-  int w = TextWidth(g_message) + 16;
+  int w = TextWidth(msg) + 16;
   int x = (cv->width - w) / 2, y = g_hints_top >= 0 ? g_hints_top - 3 - 20 : cv->height - 24;
   DrawPanel(cv, x, y, w, 20, 0x101020, 0.70f);
-  DrawText(cv, x + 8, y + 1, g_message, 0xf8e070);
+  DrawText(cv, x + 8, y + 1, msg, 0xf8e070);
 }
 
 // Pixel mescolato con quello sotto (a = opacita')
@@ -1353,7 +1384,7 @@ static void DrawHintColumn(Canvas *cv, const Hint *h, int n, int cx, int pad) {
 // posizione sullo schermo dallo scorrimento, cosi' il contorno segue il menu
 // anche mentre scende e risale.
 static void DrawInventoryLetterOutlines(Canvas *cv) {
-  if (main_module_index != 14 || submodule_index != 1)
+  if (main_module_index != 14 || submodule_index != 1 || HdInv_Enabled())
     return;
   Ppu *ppu = g_zenv.ppu;
   BgLayer *bg = &ppu->bgLayer[2];
@@ -1398,8 +1429,12 @@ static void DrawInventoryLetterOutlines(Canvas *cv) {
             int gy = y + dy, gx = x + dx;
             near = gy >= 0 && gy < 16 && gx >= 0 && gx < 8 && glyph[gy][gx];
           }
-        if (near)
-          Canvas_Pixel(cv, sx + x, sy + y, 0x000000);
+        // only over the game: the frame of the box under and over the letter
+        // (interface, layer 2) stays whole
+        int px = sx + x, py = sy + y;
+        if (near && (unsigned)px < (unsigned)cv->width && (unsigned)py < (unsigned)cv->height &&
+            ((const uint32 *)(cv->pixels + py * cv->scale * cv->pitch))[px * cv->scale] >> 24 != 2)
+          Canvas_Pixel(cv, px, py, 0x000000);
       }
   }
 }
@@ -1420,7 +1455,7 @@ static void DrawButtonHints(Canvas *cv) {
   // fermo in basso (Hud_BringMenuDown finito, 0xff18): mentre scende o risale
   // gli passerebbe sopra; spariscono appena si preme START per chiuderlo (5)
   // and stay hidden while it closes (6: its first frame is still at 0xff18)
-  if (sub == 1 && (uint16)BG3VOFS_copy2 == 0xff18 && overworld_map_state != 5 && overworld_map_state != 6) {
+  if (sub == 1 && !HdInv_Enabled() && (uint16)BG3VOFS_copy2 == 0xff18 && overworld_map_state != 5 && overworld_map_state != 6) {
     Hint left[2] = { { kBtn_Dpad, "Scegli" }, { kBtn_Start, "Chiudi" } };
     Hint right[2];
     int nr = 0;
@@ -1860,11 +1895,19 @@ static int RowH(int i) {
   return g_items[i].id == kHeaderId ? kHeaderH : kRowHeight;
 }
 
+static int g_menu_dim;  // 0-8: fade of darkening and blur under the options menu
+
+int HdMenu_DimSteps(void) {
+  return g_menu_dim;
+}
+
 void HdMenu_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   Canvas cv = { pixels, pitch, width / scale, height / scale, scale };
   HdText_Draw(pixels, pitch, width, height, scale);
   // under the options menu too, darkened with the game like the classic HUD
   HdHud_Draw(pixels, pitch, width, height, scale);
+  // modern item menu (START), over the game and the HUD
+  HdInv_Draw(pixels, pitch, width, height, scale);
   if (!g_font_data)
     Font_Load();
   // the same font everywhere, also before the options menu is first opened
@@ -1872,8 +1915,11 @@ void HdMenu_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   g_hints_top = -1;
   // Darkening of the game under the options menu (less with the blur): it
   // fades in and out in 8 draws like the blur, not at once
-  static int menu_dim;  // 0-8
-  menu_dim = g_menu_open ? IntMin(menu_dim + 1, 8) : IntMax(menu_dim - 1, 0);
+  int menu_dim = g_menu_dim = g_menu_open ? IntMin(g_menu_dim + 1, 8) : IntMax(g_menu_dim - 1, 0);
+  // the blur under the options menu takes the interface too: HUD, item
+  // menu and dialogues go out of focus with the game
+  if (menu_dim && g_config.fx_menu_blur)
+    HdFx_BlurAll(pixels, pitch, width, height, menu_dim / 8.0f);
   // Dimmed pause (P): game, HUD and texts keep 3/8 of their colour, and the
   // options menu opened during the pause adds no darkening of its own: the
   // game behind it stays as dark as the pause, the menu is drawn on top

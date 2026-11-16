@@ -1665,6 +1665,11 @@ void SpriteDraw_SingleSmall(int k) {  // 86dcef
     SpriteDraw_Shadow_custom(k, &info, 2);
 }
 
+// Tile SpriteDraw_SingleSmall draws for sprite k with picture g
+int Sprite_SingleSmallChr(int k, int g) {
+  return kSprite_PrepAndDrawSingleLarge_Tab2[kSprite_PrepAndDrawSingleLarge_Tab1[sprite_type[k]] + g];
+}
+
 void Sprite_DrawThinAndTall(int k) {  // 86dd40
   PrepOamCoordsRet info;
   if (Sprite_PrepOamCoordOrDoubleRet(k, &info))
@@ -3298,7 +3303,11 @@ void Sprite_CorrectOamEntries(int k, int n, uint8 islarge) {  // 86febc
     uint16 y = spr_y + (int8)(oam->y - scrolly);
     uint8 ext = sign8(islarge) ? (*extp & 2) : islarge;
     *extp = ext + ((uint16)(x - BG2HOFS_copy2) >= 0x100);
-    if ((uint16)(y + 0x10 - BG2VOFS_copy2) >= 0x100)
+    // Continuous world: as SetOamHelper0, a piece out of the game camera is
+    // kept (its true row is found at drawing time): the death poof of a
+    // soldier killed above the game camera, in the rows of the view beyond
+    // it, was hidden while his body was drawn
+    if (!SpriteDraw_YVisible(y - BG2VOFS_copy2))
       oam->y = 0xf0;
   } while (oam++, extp++, --n >= 0);
 }

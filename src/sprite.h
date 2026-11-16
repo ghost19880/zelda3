@@ -157,6 +157,7 @@ void Sprite_PrepAndDrawSingleLargeNoPrep(int k, PrepOamCoordsRet *info);
 void SpriteDraw_Shadow_custom(int k, PrepOamCoordsRet *info, uint8 a);
 void SpriteDraw_Shadow(int k, PrepOamCoordsRet *oam);
 void SpriteDraw_SingleSmall(int k);
+int Sprite_SingleSmallChr(int k, int g);
 void Sprite_DrawThinAndTall(int k);
 void SpriteModule_Carried(int k);
 void CarriedSprite_CheckForThrow(int k);

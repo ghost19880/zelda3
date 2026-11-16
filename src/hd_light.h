@@ -33,6 +33,10 @@ extern int g_hd_light_sub;
 
 // After loading a quick save (zelda_rtl.c LoadSnesState)
 void HdLight_ResetAfterLoad(void);
+// Rewind and quick saves: what moves with time (zelda_rtl.c HdAnim_IO),
+// saved and loaded with the game
+#include "snes/saveload.h"
+void HdLight_RewindIO(SaveLoadFunc *func, void *ctx);
 // Dark room without the Lantern and with no torch lit: the game shows it all
 // black, so the HD scenery effects (water, pits, ice, fog...) are not drawn
 bool HdLight_PitchBlack(void);

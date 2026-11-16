@@ -36,6 +36,7 @@ enum {
   kKeys_VolumeDown,
   kKeys_HdMenu,
   kKeys_CheatKillLink,
+  kKeys_Rewind,
   kKeys_Total,
 };
 
@@ -104,7 +105,10 @@ typedef struct Config {
   bool item_on_x, item_on_lr;
   // GBA HUD: the classic HUD laid out as in the GBA version (not with ModernHud)
   bool gba_hud;
-  uint8 text_speed;         // 0 = originale, 1 = veloce, 2 = istantaneo
+  // Modern item menu: the START menu drawn in HD in two pages, Items and
+  // Quest (hd_inv.c)
+  bool modern_items;
+  uint8 text_speed;        // 0 = originale, 1 = veloce, 2 = istantaneo
   uint8 rumble;             // vibrazione del controller: 0 spenta, 1 leggera, 2 media, 3 forte
   // Trucchi (sezione [Cheats], hd_cheats.c): tutti spenti in partenza; quelli
   // a tasto funzionano solo se accesi

@@ -31,6 +31,8 @@ void HudIt_DrawAbility(uint16 *dst, int ability, int level, bool wide);
 // Nome dell'oggetto selezionato nel riquadro 8x2 (dst = prima casella in alto
 // a sinistra, righe da 32 caselle)
 void HudIt_DrawItemName(uint16 *dst, int item, int btn_index);
+// Italian name of an item, with '\n' where the classic box breaks the line
+const char *HudIt_ItemNameFor(int item);
 
 typedef struct Ppu Ppu;
 // "VITA" al posto di "LIFE" nell'HUD, "MAPPA" e "LIVELLO" al posto di "MAP"

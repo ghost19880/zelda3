@@ -61,6 +61,12 @@ static uint32 g_win_flags = SDL_WINDOW_RESIZABLE;
 static SDL_Window *g_window;
 
 static uint8 g_paused, g_turbo, g_replay_turbo = true, g_cursor = true;
+static bool g_rewind_held;
+
+// The frames for the rewind are kept only with a key or button for it
+static bool RewindBound(void) {
+  return Config_GetKeyForCmd(kKeys_Rewind) != 0 || Config_GetPadButtonForCmd(kKeys_Rewind) >= 0;
+}
 static uint8 g_current_window_scale;
 static uint8 g_gamepad_buttons;
 // Stick turned around (zelda_rtl.h): a full turn within kStickCircleMs, then
@@ -249,6 +255,76 @@ static int64 g_turbo_wr;     // campioni scritti dal gioco
 static double g_turbo_rd;    // posizione di lettura della scheda audio
 static bool g_turbo_audio;
 
+// Rewind: the sound played is kept (about 95 seconds at 44.1 kHz) and while
+// rewinding it is played backwards, one sample back for each sample out, as
+// the frames go back in real time; the sound after the frame reached is
+// dropped on release. All with g_audio_mutex taken
+enum { kHistFrames = 1 << 22 };  // stereo samples (power of 2)
+static int16 *g_hist;
+static int64 g_hist_wr, g_hist_rd;
+static bool g_audio_reverse, g_reverse_stuck;
+static int g_rev_gain = 256;  // 0-256: a short fade when the rewind stops at the oldest frame
+static int g_fade_in;         // samples still fading in after the rewind
+
+static void History_Add(const int16 *src, int frames, int ch) {
+  if (!g_hist)
+    return;
+  for (int i = 0; i < frames; i++) {
+    uint32 p = (uint32)(g_hist_wr + i) & (kHistFrames - 1);
+    g_hist[p * 2] = src[i * ch];
+    g_hist[p * 2 + 1] = src[i * ch + (ch > 1)];
+  }
+  g_hist_wr += frames;
+}
+
+static void TurboAudio_Set(bool on);
+
+static void ReverseAudio_Begin(void) {
+  if (!g_hist || !g_audiobuffer || g_audio_reverse)
+    return;
+  TurboAudio_Set(false);
+  // from the sample being heard: the rest of the block was never played
+  int left = (int)(g_audiobuffer_end - g_audiobuffer_cur) / (g_audio_channels * (int)sizeof(int16));
+  g_hist_rd = g_hist_wr - left;
+  g_audiobuffer_cur = g_audiobuffer_end;
+  g_rev_gain = 256;
+  g_audio_reverse = true;
+}
+
+static void ReverseAudio_End(void) {
+  if (!g_audio_reverse)
+    return;
+  g_audio_reverse = false;
+  g_hist_wr = g_hist_rd;  // the sound after this point went with its frames
+  g_fade_in = 512;        // the game's sound starts again from the frame reached
+}
+
+static void ReverseAudio_Fill(int16 *out, int frames) {
+  int ch = g_audio_channels;
+  int64 lo = g_hist_wr - kHistFrames + 1;
+  if (lo < 0)
+    lo = 0;
+  int l = 0, r = 0;
+  for (int i = 0; i < frames; i++) {
+    bool more = !g_reverse_stuck && g_hist_rd > lo;
+    if (more && g_rev_gain < 256)
+      g_rev_gain += 2;
+    else if (!more && g_rev_gain > 0)
+      g_rev_gain -= 2;
+    if (more)
+      g_hist_rd--;
+    if (g_hist_rd >= lo && g_hist_rd < g_hist_wr) {
+      uint32 p = (uint32)g_hist_rd & (kHistFrames - 1);
+      l = g_hist[p * 2], r = g_hist[p * 2 + 1];
+    }
+    int g = g_rev_gain * g_sdl_audio_mixer_volume / SDL_MIX_MAXVOLUME;
+    int16 *o = out + i * ch;
+    o[0] = (int16)(l * g >> 8);
+    if (ch > 1) o[1] = (int16)(r * g >> 8);
+    for (int c = 2; c < ch; c++) o[c] = 0;
+  }
+}
+
 // Da chiamare con g_audio_mutex preso
 static void TurboAudio_Set(bool on) {
   if (on == g_turbo_audio)
@@ -313,10 +389,24 @@ static void TurboAudio_Fill(int16 *out, int frames) {
     for (int c = 2; c < ch; c++) o[c] = 0;
   }
   g_turbo_rd = (double)rd;
+  History_Add(out, frames, ch);  // what is heard, for the rewind
+}
+
+// After every game frame with a rewind key: the frame is kept, and the sound
+// played from now on is kept too (g_audio_mutex taken)
+static void RewindRecord(void) {
+  Rewind_Record();
+  if (!g_hist && g_audiobuffer)
+    g_hist = (int16 *)calloc(kHistFrames * 2, sizeof(int16));
 }
 
 static void SDLCALL AudioCallback(void *userdata, Uint8 *stream, int len) {
   if (SDL_LockMutex(g_audio_mutex)) Die("Mutex lock failed!");
+  if (g_audio_reverse) {
+    ReverseAudio_Fill((int16 *)stream, len / (g_audio_channels * (int)sizeof(int16)));
+    SDL_UnlockMutex(g_audio_mutex);
+    return;
+  }
   if (g_turbo_audio) {
     int frames = len / (g_audio_channels * (int)sizeof(int16));
     if (g_sdl_audio_mixer_volume == SDL_MIX_MAXVOLUME) {
@@ -336,9 +426,12 @@ static void SDLCALL AudioCallback(void *userdata, Uint8 *stream, int len) {
     SDL_UnlockMutex(g_audio_mutex);
     return;
   }
+  int16 *start = (int16 *)stream;
+  int total = len / (g_audio_channels * (int)sizeof(int16));
   while (len != 0) {
     if (g_audiobuffer_end - g_audiobuffer_cur == 0) {
       ZeldaRenderAudio((int16*)g_audiobuffer, g_frames_per_block, g_audio_channels);
+      History_Add((int16 *)g_audiobuffer, g_frames_per_block, g_audio_channels);
       g_audiobuffer_cur = g_audiobuffer;
       g_audiobuffer_end = g_audiobuffer + g_frames_per_block * g_audio_channels * sizeof(int16);
     }
@@ -352,6 +445,12 @@ static void SDLCALL AudioCallback(void *userdata, Uint8 *stream, int len) {
     g_audiobuffer_cur += n;
     stream += n;
     len -= n;
+  }
+  // after the rewind the game's sound fades in (it starts again elsewhere)
+  for (int i = 0; i < total && g_fade_in > 0; i++, g_fade_in--) {
+    int g = 512 - g_fade_in;
+    for (int c = 0; c < g_audio_channels; c++)
+      start[i * g_audio_channels + c] = (int16)(start[i * g_audio_channels + c] * g / 512);
   }
 
   ZeldaDiscardUnusedAudioFrames();
@@ -638,6 +737,8 @@ int main(int argc, char** argv) {
     }
 
     bool menu_open = HdMenu_IsOpen();
+    bool rewinding = g_rewind_held && !g_paused && !menu_open;
+    HdMenu_SetRewinding(rewinding);
     // col menu opzioni aperto l'audio e' in pausa: e' un menu "sopra" il
     // gioco (niente musica e niente suoni, anche durante la navigazione)
     if ((g_paused || menu_open) != audiopaused) {
@@ -667,6 +768,27 @@ int main(int argc, char** argv) {
       continue;
     }
 
+    // Rewind held: one game frame back for each frame shown, 60 per second
+    // (at the oldest frame kept the game stays still); released, the music
+    // goes on from there and the game runs as usual
+    if (rewinding) {
+      uint64 start = SDL_GetPerformanceCounter();
+      SDL_LockMutex(g_audio_mutex);
+      ReverseAudio_Begin();  // the sound goes backwards with the game
+      g_reverse_stuck = !Rewind_Step();
+      SDL_UnlockMutex(g_audio_mutex);
+      DrawPpuFrameWithPerf();
+      double spent = (SDL_GetPerformanceCounter() - start) / (double)SDL_GetPerformanceFrequency();
+      if (spent < 1.0 / 60)
+        SDL_Delay((uint32)((1.0 / 60 - spent) * 1000.0));
+      lastTick = SDL_GetTicks();
+      continue;
+    }
+    SDL_LockMutex(g_audio_mutex);
+    ReverseAudio_End();
+    Rewind_End();
+    SDL_UnlockMutex(g_audio_mutex);
+
     // Schermi oltre i 60 Hz: il gioco avanza a 60 frame al secondo in base al
     // tempo reale e ogni aggiornamento dello schermo (sincronizzato col
     // vsync) disegna lo scorrimento interpolato fra gli ultimi due frame.
@@ -694,6 +816,8 @@ int main(int argc, char** argv) {
         TurboAudio_Set(false);
         StickCircle_Expire();
         ZeldaRunFrame(hr_inputs);
+        if (RewindBound())
+          RewindRecord();
         HdMenu_AfterFrame();
         SDL_UnlockMutex(g_audio_mutex);
         frameCtr++;
@@ -722,6 +846,8 @@ int main(int argc, char** argv) {
     TurboAudio_Set(g_turbo && g_audiobuffer != NULL);
     StickCircle_Expire();
     bool is_replay = ZeldaRunFrame(inputs);
+    if (RewindBound())
+      RewindRecord();
     TurboAudio_Frame();
     HdMenu_AfterFrame();
     SDL_UnlockMutex(g_audio_mutex);
@@ -775,6 +901,7 @@ int main(int argc, char** argv) {
   free(g_audiobuffer);
   free(g_turbo_ring);
   free(g_turbo_out);
+  free(g_hist);
 
   g_renderer_funcs.Destroy();
 
@@ -843,6 +970,10 @@ static void HandleCommand(uint32 j, bool pressed) {
 
   if (j == kKeys_Turbo) {
     g_turbo = pressed;
+    return;
+  }
+  if (j == kKeys_Rewind) {  // held: the main loop goes back
+    g_rewind_held = pressed;
     return;
   }
 
@@ -1193,7 +1324,7 @@ void Host_AdjustVolume(int step) {
 void Host_Rumble(float low, float high, int ms) {
   static const float kScale[4] = { 0, 0.4f, 0.7f, 1.0f };
   float k = kScale[g_config.rumble & 3];
-  if (k == 0 || ms <= 0)
+  if (k == 0 || ms <= 0 || g_rewind_frame)
     return;
   low = low < 0 ? 0 : low > 1 ? 1 : low;
   high = high < 0 ? 0 : high > 1 ? 1 : high;
@@ -1225,6 +1356,7 @@ void Host_SetPpuRenderFlags(uint32 flags) {
 void Host_ClearInputs() {
   g_input1_state = 0;
   g_gamepad_buttons = 0;
+  g_rewind_held = false;  // released while the menu took the keys
 }
 
 bool Host_PauseDimmed() {

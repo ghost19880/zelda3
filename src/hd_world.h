@@ -38,6 +38,16 @@ bool HdWorld_BackgroundFromImages(void);
 void HdWorld_ResetStates(void);
 // Dopo il caricamento di un salvataggio: chi seguiva Link resta sconfitto nella sua area
 void HdWorld_AfterLoad(void);
+// Memory of the continuous world in quick saves and in the rewind: saves or
+// loads, then HdWorld_MemoryLoaded (new_epoch for a loaded game)
+#include "snes/saveload.h"
+void HdWorld_MemoryIO(SaveLoadFunc *func, void *ctx);
+void HdWorld_MemoryLoaded(bool new_epoch);
+// Rewind and quick saves: the view and the enemies around (fixed size), then
+// the live copies of the areas around (only those in use), see zelda_rtl.c HdAnim_IO
+void HdWorld_RewindIO(SaveLoadFunc *func, void *ctx);
+void HdWorld_LiveIO(SaveLoadFunc *func, void *ctx, bool load);
+void HdWorld_DropLive(void);
 // Dopo aver decompresso l'area corrente: riscrive le caselle ricordate
 void HdWorld_EnterAreaTiles(bool memorize);
 // Dopo che il gioco ha azzerato la sua lista: la riempie di nuovo

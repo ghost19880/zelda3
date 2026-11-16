@@ -1323,6 +1323,32 @@ static void ApplyPortals(uint8 *pixels, int pitch, int width, int height, int ca
   }
 }
 
+// Opaque pixels of picture g of a sprite drawn as one 8x8 tile
+static int SmallSpritePixels(int k, int g) {
+  Ppu *ppu = g_zenv.ppu;
+  int adr = ((sprite_oam_flags[k] & 1) ? ppu->objTileAdr2 : ppu->objTileAdr1) + Sprite_SingleSmallChr(k, g) * 16;
+  int n = 0;
+  for (int r = 0; r < 8; r++) {
+    uint16 p01 = ppu->vram[(adr + r) & 0x7fff], p23 = ppu->vram[(adr + 8 + r) & 0x7fff];
+    for (int bit = 0; bit < 8; bit++)
+      n += HdFx_Pixel4bpp(p01, p23, bit) != 0;
+  }
+  return n;
+}
+
+// Flicker of the hobo's campfire (sprite k), in step with its flame: the
+// game swaps two pictures every 8 frames (Sprite_Hobo_Fire); the light is
+// strong with the tall one, weaker with the low one, and goes from one to
+// the other in the first 3 frames of each picture
+float HdFx_CampfirePulse(int k) {
+  int fc = frame_counter;
+  int tall = SmallSpritePixels(k, 1) > SmallSpritePixels(k, 0) ? 1 : 0;
+  int g = fc >> 3 & 1, p = fc & 7;
+  float now = g == tall ? 1.0f : 0.72f, before = g == tall ? 0.72f : 1.0f;
+  float w = p >= 2 ? 1.0f : (p + 1) / 3.0f;
+  return before + (now - before) * w;
+}
+
 // The hobo's campfire under the bridge (sprite 0x2b, sprite_subtype2 2): a
 // warm halo that flickers like a flame, drawn on the frame because in
 // daylight the light of hd_light.c barely shows; behind the sprites
@@ -1330,9 +1356,10 @@ static void ApplyCampfireGlow(uint8 *pixels, int pitch, int width, int height, i
   for (int k = 0; k < 16; k++) {
     if (sprite_type[k] != 0x2b || sprite_state[k] != 9 || sprite_subtype2[k] != 2)
       continue;
-    float tf = g_fx_frames * 0.105f;
-    float pulse = 0.82f + 0.12f * sinf(tf * 1.6f + k) + 0.06f * sinf(tf * 4.1f + k * 2.0f);
-    float cx = (float)(Sprite_GetX(k) + 8 - cam_x + ext), cy = (float)(Sprite_GetY(k) + 10 - cam_y);
+    float pulse = HdFx_CampfirePulse(k);
+    // centred on the base of the flame, in the middle of the logs (the 16x16
+    // block below, lx/ly), as the light of hd_light.c
+    float cx = (float)(((Sprite_GetX(k) + 4) & ~15) + 8 - cam_x + ext), cy = (float)(((Sprite_GetY(k) + 8) & ~15) + 5 - cam_y);
     float rx = 34 * (0.94f + 0.06f * pulse), ry = rx * 0.8f, a = 0.42f * pulse;
     // the logs are background tiles: the 16x16 block under the flame (screen
     // row 0 is background row 1); its brown pixels stay unlit, the grass not
@@ -3016,6 +3043,7 @@ void HdFx_Fog(uint8 *pixels, int pitch, int width, int height, int bias_x, int b
 // entrano nella media, cosi' i riquadri non "sbavano" sul gioco.
 
 bool HdMenu_IsOpen();
+int HdMenu_DimSteps(void);
 bool Host_PauseDimmed();
 bool Host_Paused();
 
@@ -3043,8 +3071,9 @@ static void BoxBlur1D(const int32 *src, int32 *dst, int n, int stride) {
 
 // Sums (r, g, b, how many) of the w x h rectangle at x0, y0 with two
 // horizontal and vertical passes of radius 3 (almost a gaussian), the HUD
-// left out of the average; laid out w * 4 per row. NULL without memory
-static const int32 *BlurRect(const uint8 *pixels, int pitch, int x0, int y0, int w, int h) {
+// left out of the average unless all; laid out w * 4 per row. NULL without
+// memory
+static const int32 *BlurRect(const uint8 *pixels, int pitch, int x0, int y0, int w, int h, bool all) {
   int n = w * h;
   if (n > g_blur_cap) {
     free(g_blur_buf), free(g_blur_tmp);
@@ -3059,7 +3088,7 @@ static const int32 *BlurRect(const uint8 *pixels, int pitch, int x0, int y0, int
     int32 *b = g_blur_buf + y * w * 4;
     for (int x = 0; x < w; x++, b += 4) {
       uint32 c = row[x];
-      bool ui = IsHud(c);
+      bool ui = !all && IsHud(c);
       b[0] = ui ? 0 : (c >> 16) & 0xff;
       b[1] = ui ? 0 : (c >> 8) & 0xff;
       b[2] = ui ? 0 : c & 0xff;
@@ -3099,7 +3128,7 @@ static void DialogGlass(uint8 *pixels, int pitch, int width, int height) {
   if (frame * 10 < w * 7)
     return;
   // come dietro i menu: l'interfaccia non entra nella media
-  const int32 *acc = BlurRect(pixels, pitch, x0, y0, w, h);
+  const int32 *acc = BlurRect(pixels, pitch, x0, y0, w, h, false);
   if (!acc)
     return;
   for (int y = 0; y < h; y++) {
@@ -3153,7 +3182,11 @@ void HdFx_MenuBlur(uint8 *pixels, int pitch, int width, int height) {
   if (amount <= 0)
     return;
   // due passate orizzontali e verticali di raggio 3: quasi una gaussiana
-  const int32 *acc = BlurRect(pixels, pitch, 0, 0, width, height);
+  // under the options menu everything is blurred, the interface too
+  // (HdMenu_Draw, HdFx_BlurAll): not the game twice
+  if (HdMenu_DimSteps() > 0)
+    return;
+  const int32 *acc = BlurRect(pixels, pitch, 0, 0, width, height, false);
   if (!acc)
     return;
   // during the dimmed pause the darkening is the pause one (HdMenu_Draw)
@@ -3169,6 +3202,27 @@ void HdFx_MenuBlur(uint8 *pixels, int pitch, int width, int height) {
       int r = (int)((((c >> 16) & 0xff) * keep + b[0] * inv) * dark);
       int g = (int)((((c >> 8) & 0xff) * keep + b[1] * inv) * dark);
       int bl = (int)(((c & 0xff) * keep + b[2] * inv) * dark);
+      row[x] = (c & 0xff000000) | HdFx_ClampByte(r) << 16 | HdFx_ClampByte(g) << 8 | HdFx_ClampByte(bl);
+    }
+  }
+}
+
+void HdFx_BlurAll(uint8 *pixels, int pitch, int width, int height, float amount) {
+  if (amount <= 0)
+    return;
+  const int32 *acc = BlurRect(pixels, pitch, 0, 0, width, height, true);
+  if (!acc)
+    return;
+  float keep = 1.0f - amount;
+  for (int y = 0; y < height; y++) {
+    uint32 *row = (uint32 *)(pixels + y * pitch);
+    const int32 *b = acc + y * width * 4;
+    for (int x = 0; x < width; x++, b += 4) {
+      uint32 c = row[x];
+      float inv = amount / b[3];
+      int r = (int)(((c >> 16) & 0xff) * keep + b[0] * inv);
+      int g = (int)(((c >> 8) & 0xff) * keep + b[1] * inv);
+      int bl = (int)((c & 0xff) * keep + b[2] * inv);
       row[x] = (c & 0xff000000) | HdFx_ClampByte(r) << 16 | HdFx_ClampByte(g) << 8 | HdFx_ClampByte(bl);
     }
   }
@@ -4043,4 +4097,19 @@ void HdFx_ResetAfterLoad(void) {
   g_flash = 0, g_flash_rise = false;
   memset(g_boom_ghost, 0, sizeof(g_boom_ghost));
   memset(g_hammer_wave, 0, sizeof(g_hammer_wave));
+}
+
+// Rewind and quick saves (zelda_rtl.c HdAnim_IO): rain, particles, boomerang copies,
+// hammer waves, window light, fog and the other effects that move with time
+// go back with the game; the same calls save and load
+void HdFx_RewindIO(SaveLoadFunc *func, void *ctx) {
+#define F(v) func(ctx, &v, sizeof(v));
+  F(g_rng) F(g_last_frame) F(g_fx_frames)
+  F(g_boom_ghost) F(g_boom_ghost_frame) F(g_boom_ghost_seen) F(g_boom_ghost_timer) F(g_boom_ghost_count)
+  F(g_hammer_wave) F(g_hammer_wave_frame)
+  F(g_particles) F(g_num_particles)
+  F(g_shafts) F(g_num_shafts) F(g_shaft_room) F(g_shaft_timer)
+  F(g_drops) F(g_drops_init) F(g_flash) F(g_flash_rise)
+  F(g_fog_t) F(g_fog_last_frame) F(g_blur_amount) F(g_white_floor)
+#undef F
 }

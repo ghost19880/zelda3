@@ -166,6 +166,11 @@ float HdFx_LightningWhite(void);
 bool HdFx_SunnyOutdoors(void);
 // Sfoca e scurisce il gioco dietro inventario, dialoghi e menu
 void HdFx_MenuBlur(uint8 *pixels, int pitch, int width, int height);
+// Flicker (0.72-1) of the hobo's campfire, sprite k, in step with its flame
+float HdFx_CampfirePulse(int k);
+// Under the options menu: the whole frame blurred, the interface (HUD, item
+// menu) too; amount 0-1
+void HdFx_BlurAll(uint8 *pixels, int pitch, int width, int height, float amount);
 // Sfocatura in corso: lo shader non si applica finche' c'e'
 bool HdFx_MenuBlurActive(void);
 // How much of the menu blur is on screen (0 = none, 1 = full)
@@ -249,6 +254,10 @@ bool HdFx_IsCloudColor(uint16 e, int v);
 
 // After loading a quick save (zelda_rtl.c LoadSnesState)
 void HdFx_ResetAfterLoad(void);
+// Rewind and quick saves: what moves with time (zelda_rtl.c HdAnim_IO),
+// saved and loaded with the game
+#include "snes/saveload.h"
+void HdFx_RewindIO(SaveLoadFunc *func, void *ctx);
 // Four Swords Adventures boomerang: the boomerang drawn at world (wx, wy) with
 // OAM tile and flags, flying speed pixels a frame; called every frame of
 // flight (hd_fx.c)

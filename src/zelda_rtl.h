@@ -58,6 +58,10 @@ bool ZeldaIsPlayingMusicTrack(uint8 track);
 uint8 ZeldaGetEntranceMusicTrack(int track);
 void ZeldaSetLanguage(const char *language);
 void PatchCommand(char cmd);
+void Rewind_Record(void);
+bool Rewind_Step(void);
+void Rewind_End(void);
+extern bool g_rewind_frame;  // a frame played again by the rewind (Rewind_Step)
 
 // Things for state management
 

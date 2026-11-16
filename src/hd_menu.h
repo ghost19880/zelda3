@@ -43,6 +43,8 @@ void HdMenu_Draw(uint8 *pixels, int pitch, int width, int height, int scale);
 
 // Mostra un breve messaggio in basso sullo schermo
 void HdMenu_ShowMessage(const char *msg);
+// Rewind key held (main.c): a card says so while the game goes back
+void HdMenu_SetRewinding(bool on);
 // Suggerimenti dei tasti accesi e disegnabili (solo con le fasce del 16:9 o 16:10)
 bool HdMenu_ButtonHintsOn(void);
 // Link entra da una porta del mondo esterno: se e' la porta principale di un

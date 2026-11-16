@@ -247,6 +247,10 @@ static const char *ItemName(int item, int btn_index) {
   return item >= 1 && item <= 20 ? kItems[item - 1] : "";
 }
 
+const char *HudIt_ItemNameFor(int item) {
+  return ItemName(item, 0);
+}
+
 void HudIt_DrawItemName(uint16 *dst, int item, int btn_index) {
   const char *name = ItemName(item, btn_index);
   const char *nl = strchr(name, '\n');

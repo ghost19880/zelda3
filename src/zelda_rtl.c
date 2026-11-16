@@ -18,6 +18,7 @@
 #include "hd_pit.h"
 #include "hd_rumble.h"
 #include "hd_hud.h"
+#include "hd_inv.h"
 #include "hud_it.h"
 #include "hd_menu.h"
 #include "hd_icegba.h"
@@ -166,6 +167,7 @@ float g_interp_alpha = 1.0f;
 extern int g_lamp_cone_idx;
 
 #include "hd_world.h"
+#include "hd_burn.h"
 #include "hd_trans.h"
 #include "overworld.h"
 
@@ -661,6 +663,7 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
   HdLight_BeforeRender(g_zenv.ppu);
   HdHud_BeforeRender(g_zenv.ppu);
   HdText_BeforeRender(g_zenv.ppu);
+  HdInv_BeforeRender(g_zenv.ppu);
   HudIt_BeforeRender(g_zenv.ppu);
   Overworld_GbaCharsBeforeRender(g_zenv.ppu);
   HdFx_IrisBeforeRender(g_zenv.ppu);
@@ -709,6 +712,7 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
   if (g_zenv.ppu->bg3MaxDigits)
     g_zenv.ppu->cgram[0x10] = cg10;
   HdText_AfterRender(g_zenv.ppu);
+  HdInv_AfterRender(g_zenv.ppu);
   Overworld_GbaCharsAfterRender(g_zenv.ppu);
   HudIt_AfterRender(g_zenv.ppu);
   HdLight_AfterRender(g_zenv.ppu);
@@ -935,7 +939,13 @@ static void InternalSaveLoad(SaveLoadFunc *func, void *ctx) {
   func(ctx, junk, 4); // snes junk
 }
 
+static void HdResetAfterLoad(LoadFuncState *hd, bool anim);
+static void Rewind_Clear(void);
+static void Rewind_MakePatch(ByteArray *out, const uint8 *old, const uint8 *now, size_t size);
+static void Rewind_ApplyPatch(uint8 *state, size_t size, const uint8 *p, size_t psize);
+
 void ZeldaReset(bool preserve_sram) {
+  Rewind_Clear();
   frame_ctr_dbg = 0;
   dma_reset(g_zenv.dma);
   ppu_reset(g_zenv.ppu);
@@ -949,7 +959,10 @@ void ZeldaReset(bool preserve_sram) {
 
 }
 
-static void LoadSnesState(SaveLoadFunc *func, void *ctx) {
+// hd: the HD state saved with the game (HdState_IO, with HdAnim_IO after it
+// when anim), or NULL (old saves, replays)
+static void LoadSnesState(SaveLoadFunc *func, void *ctx, LoadFuncState *hd, bool anim) {
+  Rewind_Clear();  // the frames kept for the rewind belong to the old game
   // Do the actual loading
   ZeldaApuLock();
   InternalSaveLoad(func, ctx);
@@ -958,14 +971,104 @@ static void LoadSnesState(SaveLoadFunc *func, void *ctx) {
   ZeldaRestoreMusicAfterLoad_Locked(false);
   ZeldaApuUnlock();
   EmuSynchronizeWholeState();
-  HdWorld_ResetStates();  // il mondo persistente riparte dal salvataggio
-  HdWorld_AfterLoad();
-  // every HD effect starts again from the loaded game, not from the old place
+  HdResetAfterLoad(hd, anim);
+}
+
+// The HD state that goes with the game (quick saves and rewind): fires,
+// burnt and frozen tiles, the memory of the continuous world and the arrows
+// stuck in the walls. The same calls save and load. The rest (particles,
+// light, the view...) is worked out again from the game
+static void HdState_IO(SaveLoadFunc *func, void *ctx) {
+  HdBurn_SaveLoad(func, ctx);
+  HdWorld_MemoryIO(func, ctx);
+}
+
+// What moves with time in the HD effects (rain, particles, waves and mist,
+// light, the view, the enemies of the areas around...), in the rewind every
+// frame and in quick saves, so that all of it goes back with the game or
+// comes back with the save. After HdState_IO. The fixed part first, then the
+// live copies of the areas around (their number changes)
+// What moves with each game frame (ZeldaRunFrame): the view
+static void HdAnim_FrameIO(SaveLoadFunc *func, void *ctx) {
+#define F(v) func(ctx, &v, sizeof(v));
+  F(g_cam_dx) F(g_cam_dy) F(g_view_wx) F(g_view_wy) F(g_view_valid)
+  F(g_vis_prev_x) F(g_vis_prev_y) F(g_vis_cur_x) F(g_vis_cur_y)
+  F(g_trans_link_dx) F(g_trans_link_dy)
+#undef F
+  HdWorld_RewindIO(func, ctx);
+}
+
+// What moves when a new game frame is drawn: rain, particles, water, light
+static void HdAnim_DrawIO(SaveLoadFunc *func, void *ctx) {
+  HdFx_RewindIO(func, ctx);
+  HdWater_RewindIO(func, ctx);
+  HdLight_RewindIO(func, ctx);
+  HdPit_RewindIO(func, ctx);
+}
+
+static void HdAnim_FixedIO(SaveLoadFunc *func, void *ctx) {
+  HdAnim_FrameIO(func, ctx);
+  HdAnim_DrawIO(func, ctx);
+}
+
+static void HdAnim_IO(SaveLoadFunc *func, void *ctx, bool load) {
+  HdAnim_FixedIO(func, ctx);
+  HdWorld_LiveIO(func, ctx, load);  // the live copies of the areas around (each game frame)
+}
+
+// Loading of the HD state: never past its end (a damaged save), the rest is
+// zero and g_hd_load_bad says so
+static bool g_hd_load_bad;
+static void HdLoadFunc(void *ctx, void *data, size_t data_size) {
+  LoadFuncState *st = (LoadFuncState *)ctx;
+  if ((size_t)(st->pend - st->p) < data_size) {
+    memset(data, 0, data_size);
+    st->p = st->pend;
+    g_hd_load_bad = true;
+    return;
+  }
+  memcpy(data, st->p, data_size);
+  st->p += data_size;
+}
+
+// Every HD effect starts again from the game (no HD state, or a bad one)
+static void HdResetEffects(void) {
   g_seam_prev_room = -1;
   HdFx_ResetAfterLoad();
   HdLight_ResetAfterLoad();
   HdPit_ResetAfterLoad();
   HdTrans_ResetAfterLoad();
+}
+
+// Every HD effect starts again from the loaded game (quick saves and rewind),
+// with the HD state saved with it when there is one (anim: with what moves
+// with time too, HdAnim_IO)
+static void HdResetAfterLoad(LoadFuncState *hd, bool anim) {
+  HdBurn_Forget();  // the loaded RAM is not touched (water frozen indoors)
+  HdWorld_ResetStates();  // il mondo persistente riparte dal salvataggio
+  g_hd_load_bad = false;
+  if (hd) {
+    HdState_IO(&HdLoadFunc, hd);
+    if (g_hd_load_bad) {  // a damaged save: as one without HD state
+      HdBurn_Forget();
+      HdWorld_ResetStates();
+      hd = NULL;
+    } else {
+      HdBurn_Loaded();
+      HdWorld_MemoryLoaded(true);
+    }
+  }
+  HdWorld_AfterLoad();
+  // every HD effect starts again from the loaded game, not from the old place
+  HdResetEffects();
+  // then goes on from where it was, when saved with the game
+  if (hd && anim) {
+    HdAnim_IO(&HdLoadFunc, hd, true);
+    if (g_hd_load_bad) {
+      HdWorld_DropLive();
+      HdResetEffects();
+    }
+  }
 }
 
 static void SaveSnesState(SaveLoadFunc *func, void *ctx) {
@@ -1048,6 +1151,64 @@ void ReadFromFile(FILE *f, void *data, size_t n) {
     Die("fread failed\n");
 }
 
+// The HD state at the end of a quick save: "HDS1", its size, the size of
+// its packed form, the layout of this version (HdLayout), then only its
+// non-zero words (the patch of the rewind against all zeros: most of the
+// memory of the continuous world is empty). Older versions of the game stop
+// reading before it, older saves have none
+static const uint8 kHdStateMagic[4] = { 'H', 'D', 'S', '1' };
+
+// Changes with the sizes of what is saved: a save of another version is not loaded
+static uint32 HdLayout(void) {
+  ByteArray state = { 0 }, anim = { 0 };
+  HdState_IO(&saveFunc, &state);
+  HdAnim_FixedIO(&saveFunc, &anim);
+  uint32 r = (uint32)state.size * 2654435761u ^ (uint32)anim.size * 40503u ^
+      (uint32)sizeof(Ppu) * 97u ^ (uint32)sizeof(g_ram);
+  ByteArray_Destroy(&state);
+  ByteArray_Destroy(&anim);
+  return r;
+}
+
+static void HdState_Write(FILE *f) {
+  ByteArray raw = { 0 }, packed = { 0 };
+  HdState_IO(&saveFunc, &raw);
+  HdAnim_IO(&saveFunc, &raw, false);
+  uint8 *zero = calloc(raw.size ? raw.size : 1, 1);
+  if (zero) {
+    Rewind_MakePatch(&packed, raw.data, zero, raw.size);
+    uint32 sizes[3] = { (uint32)raw.size, (uint32)packed.size, HdLayout() };
+    fwrite(kHdStateMagic, 1, 4, f);
+    fwrite(sizes, 1, sizeof(sizes), f);
+    fwrite(packed.data, 1, packed.size, f);
+    free(zero);
+  }
+  ByteArray_Destroy(&raw);
+  ByteArray_Destroy(&packed);
+}
+
+// false without a good HD state (an older save, or one of another version)
+static bool HdState_Read(FILE *f, ByteArray *out) {
+  uint8 magic[4];
+  uint32 sizes[3];
+  if (fread(magic, 1, 4, f) != 4 || memcmp(magic, kHdStateMagic, 4) ||
+      fread(sizes, 1, sizeof(sizes), f) != sizeof(sizes))
+    return false;
+  if (sizes[2] != HdLayout() || sizes[0] > (64u << 20) || sizes[1] > 64ull * sizes[0] + 64)
+    return false;
+  uint8 *packed = malloc(sizes[1] ? sizes[1] : 1);
+  if (!packed)
+    return false;
+  bool ok = fread(packed, 1, sizes[1], f) == sizes[1];
+  if (ok) {
+    ByteArray_Resize(out, sizes[0]);
+    memset(out->data, 0, sizes[0]);
+    Rewind_ApplyPatch(out->data, sizes[0], packed, sizes[1]);
+  }
+  free(packed);
+  return ok;
+}
+
 void StateRecorder_Load(StateRecorder *sr, FILE *f, bool replay_mode) {
   // todo: fix robustness on invalid data.
   uint32 hdr[8] = { 0 };
@@ -1076,7 +1237,7 @@ void StateRecorder_Load(StateRecorder *sr, FILE *f, bool replay_mode) {
 
     if (sr->base_snapshot.size) {
       LoadFuncState state = { sr->base_snapshot.data, sr->base_snapshot.data + sr->base_snapshot.size };
-      LoadSnesState(&loadFunc, &state);
+      LoadSnesState(&loadFunc, &state, NULL, false);
       assert(state.p == state.pend);
     } else {
       ZeldaReset(false);
@@ -1091,8 +1252,13 @@ void StateRecorder_Load(StateRecorder *sr, FILE *f, bool replay_mode) {
     ByteArray_Resize(&arr, hdr[6]);
     ReadFromFile(f, arr.data, arr.size);
     LoadFuncState state = { arr.data, arr.data + arr.size };
-    LoadSnesState(&loadFunc, &state);
+    // the HD state after the game (HdState_Write), missing in older saves
+    ByteArray hd = { 0 };
+    bool has_hd = HdState_Read(f, &hd);
+    LoadFuncState hd_state = { hd.data, hd.data + hd.size };
+    LoadSnesState(&loadFunc, &state, has_hd ? &hd_state : NULL, true);
     ByteArray_Destroy(&arr);
+    ByteArray_Destroy(&hd);
     assert(state.p == state.pend);
   }
 }
@@ -1121,6 +1287,7 @@ void StateRecorder_Save(StateRecorder *sr, FILE *f) {
   fwrite(sr->log.data, 1, hdr[2], f);
   fwrite(sr->base_snapshot.data, 1, sr->base_snapshot.size, f);
   fwrite(arr.data, 1, arr.size, f);
+  HdState_Write(f);
 
   ByteArray_Destroy(&arr);
 }
@@ -1251,6 +1418,237 @@ int InputStateReadFromFile() {
 }
 #endif
 
+// ---------------------------------------------------------------------------
+// Rewind, as in the emulators: while the key is held the game goes back one
+// frame per frame shown (real time backwards, as RetroArch with a granularity
+// of 1), as far as the last minute (the rewind of the SNES Classic and of
+// Nintendo Switch Online); released, the game goes on from there.
+// Every game frame the state is saved and only the bytes changed since the
+// frame before are kept, with their old values: the newest record turns the
+// current state back into the one before it.
+
+enum {
+  kRewindFrames = 60 * 60,          // one minute
+  kRewindMaxBytes = 256 << 20,      // memory limit, the oldest frames go first
+};
+
+typedef struct RewindRec {
+  uint8 *data;
+  uint32 size;
+  // The size of the frame changes when live copies of the areas around come
+  // or go (at its end): the patch covers the bytes both frames have, then
+  // the rest of the older frame follows as it is
+  uint32 prev_size, patch_size;
+  // the key log at that frame (the replays stay right after a rewind)
+  uint32 log_size, total_frames, frames_since_last;
+  uint16 last_inputs;
+} RewindRec;
+
+static RewindRec g_rw[kRewindFrames];
+static int g_rw_head, g_rw_count;   // g_rw_head = next record written
+static size_t g_rw_bytes;
+static ByteArray g_rw_cur, g_rw_new, g_rw_patch;
+static RewindRec g_rw_cur_log;      // key log fields of g_rw_cur
+static bool g_rw_have_cur, g_rw_loaded;
+// Where HdAnim_DrawIO is in a frame, and its copy taken at a step (Rewind_Step)
+static size_t g_rw_anim_at, g_rw_anim_end;
+static ByteArray g_rw_anim;
+bool g_rewind_frame;
+
+static void Rewind_Drop(int i) {
+  free(g_rw[i].data);
+  g_rw_bytes -= g_rw[i].size;
+  g_rw[i].data = NULL, g_rw[i].size = 0;
+}
+
+static void Rewind_Clear(void) {
+  while (g_rw_count) {
+    g_rw_head = (g_rw_head + kRewindFrames - 1) % kRewindFrames;
+    Rewind_Drop(g_rw_head);
+    g_rw_count--;
+  }
+  g_rw_head = 0;
+  g_rw_have_cur = false;
+}
+
+static void Rewind_PutVl(ByteArray *a, uint32 v) {
+  for (; v >= 0x80; v >>= 7)
+    ByteArray_AppendByte(a, (uint8)(v | 0x80));
+  ByteArray_AppendByte(a, (uint8)v);
+}
+
+static uint32 Rewind_GetVl(const uint8 **p) {
+  uint32 v = 0;
+  for (int sh = 0;; sh += 7) {
+    uint8 b = *(*p)++;
+    v |= (uint32)(b & 0x7f) << sh;
+    if (!(b & 0x80))
+      return v;
+  }
+}
+
+// Records of (words to skip, words changed, their old values) that turn
+// |now| back into |old|; the bytes after the last whole word always go in
+static void Rewind_MakePatch(ByteArray *out, const uint8 *old, const uint8 *now, size_t size) {
+  out->size = 0;
+  size_t words = size / 4, i = 0, last = 0;
+  const uint32 *o = (const uint32 *)old, *n = (const uint32 *)now;
+  while (i < words) {
+    if (o[i] == n[i]) {
+      i++;
+      continue;
+    }
+    size_t start = i;
+    // a run ends after two equal words (one alone costs less than a new record)
+    while (i < words && (o[i] != n[i] || (i + 1 < words && o[i + 1] != n[i + 1])))
+      i++;
+    Rewind_PutVl(out, (uint32)(start - last));
+    Rewind_PutVl(out, (uint32)(i - start));
+    ByteArray_AppendData(out, old + start * 4, (i - start) * 4);
+    last = i;
+  }
+  ByteArray_AppendData(out, old + words * 4, size - words * 4);
+}
+
+static void Rewind_ApplyPatch(uint8 *state, size_t size, const uint8 *p, size_t psize) {
+  size_t words = size / 4, w = 0, tail = size - words * 4;
+  const uint8 *end = p + psize - tail;
+  while (p < end) {
+    w += Rewind_GetVl(&p);
+    uint32 n = Rewind_GetVl(&p);
+    memcpy(state + w * 4, p, n * 4);
+    p += n * 4, w += n;
+  }
+  memcpy(state + words * 4, end, tail);
+}
+
+static void Rewind_KeyLog(RewindRec *r) {
+  r->log_size = (uint32)state_recorder.log.size;
+  r->total_frames = state_recorder.total_frames;
+  r->frames_since_last = state_recorder.frames_since_last;
+  r->last_inputs = state_recorder.last_inputs;
+}
+
+// After every game frame (only with a rewind key or button)
+void Rewind_Record(void) {
+  // not before the game starts, nor while a replay plays
+  if (animated_tile_data_src == 0 || state_recorder.replay_mode) {
+    Rewind_Clear();
+    return;
+  }
+  g_rw_new.size = 0;
+  SaveSnesState(&saveFunc, &g_rw_new);
+  HdState_IO(&saveFunc, &g_rw_new);  // fire, ice and the world's memory go back too
+  // and every effect that moves with time (as HdAnim_IO)
+  HdAnim_FrameIO(&saveFunc, &g_rw_new);
+  g_rw_anim_at = g_rw_new.size;
+  HdAnim_DrawIO(&saveFunc, &g_rw_new);
+  g_rw_anim_end = g_rw_new.size;
+  HdWorld_LiveIO(&saveFunc, &g_rw_new, false);
+  if (g_rw_have_cur) {
+    size_t common = g_rw_cur.size < g_rw_new.size ? g_rw_cur.size : g_rw_new.size;
+    Rewind_MakePatch(&g_rw_patch, g_rw_cur.data, g_rw_new.data, common);
+    uint32 patch_size = (uint32)g_rw_patch.size;
+    ByteArray_AppendData(&g_rw_patch, g_rw_cur.data + common, g_rw_cur.size - common);
+    if (g_rw_count == kRewindFrames) {  // full: the oldest frame goes
+      Rewind_Drop((g_rw_head + kRewindFrames - g_rw_count) % kRewindFrames);
+      g_rw_count--;
+    }
+    RewindRec *r = &g_rw[g_rw_head];
+    *r = g_rw_cur_log;
+    r->size = (uint32)g_rw_patch.size;
+    r->prev_size = (uint32)g_rw_cur.size, r->patch_size = patch_size;
+    r->data = malloc(r->size ? r->size : 1);
+    if (!r->data) {
+      Rewind_Clear();
+      return;
+    }
+    memcpy(r->data, g_rw_patch.data, r->size);
+    g_rw_bytes += r->size;
+    g_rw_head = (g_rw_head + 1) % kRewindFrames;
+    g_rw_count++;
+    while (g_rw_bytes > kRewindMaxBytes && g_rw_count > 1) {
+      Rewind_Drop((g_rw_head + kRewindFrames - g_rw_count) % kRewindFrames);
+      g_rw_count--;
+    }
+  }
+  ByteArray t = g_rw_cur;
+  g_rw_cur = g_rw_new, g_rw_new = t;
+  Rewind_KeyLog(&g_rw_cur_log);
+  g_rw_have_cur = true;
+}
+
+// One frame back; false when there is nothing older (the game stays there).
+// The frame before is loaded and the game frame that led to the current one
+// is played again with its keys: every HD effect (continuous world, water,
+// light...) keeps up with the game as when playing, only drawing the loaded
+// frame left them on the place of the frames ahead
+bool Rewind_Step(void) {
+  if (!g_rw_count || !g_rw_have_cur)
+    return false;
+  uint16 inputs = g_rw_cur_log.last_inputs;  // pressed in the current frame
+  int i = (g_rw_head + kRewindFrames - 1) % kRewindFrames;
+  RewindRec *r = &g_rw[i];
+  // The drawn effects as they were when the current frame was recorded:
+  // drawn up to the frame before it. Played again from the frame before, the
+  // current frame is drawn with them one step on, as it was shown (with the
+  // effects of the frame before they stayed a step behind the game)
+  g_rw_anim.size = 0;
+  ByteArray_AppendData(&g_rw_anim, g_rw_cur.data + g_rw_anim_at, g_rw_anim_end - g_rw_anim_at);
+  size_t common = g_rw_cur.size < r->prev_size ? g_rw_cur.size : r->prev_size;
+  Rewind_ApplyPatch(g_rw_cur.data, common, r->data, r->patch_size);
+  ByteArray_Resize(&g_rw_cur, r->prev_size);
+  memcpy(g_rw_cur.data + common, r->data + r->patch_size, r->prev_size - common);
+  g_rw_cur_log = *r;
+  g_rw_cur_log.data = NULL, g_rw_cur_log.size = 0;
+  Rewind_Drop(i);
+  g_rw_head = i;
+  g_rw_count--;
+
+  // the key log goes back with the game
+  if (state_recorder.log.size >= g_rw_cur_log.log_size)
+    state_recorder.log.size = g_rw_cur_log.log_size;
+  state_recorder.total_frames = g_rw_cur_log.total_frames;
+  state_recorder.frames_since_last = g_rw_cur_log.frames_since_last;
+  state_recorder.last_inputs = g_rw_cur_log.last_inputs;
+
+  // as a quick save is loaded; the HD effects start again from it once, at
+  // the first step (every frame would throw away the images of the areas
+  // around); the music once released (Rewind_End), the sound is off meanwhile
+  ZeldaApuLock();
+  LoadFuncState st = { g_rw_cur.data, g_rw_cur.data + g_rw_cur.size };
+  InternalSaveLoad(&loadFunc, &st);
+  memcpy(g_zenv.ram + 0x1DBA0, g_zenv.ram + 0x1b00, 224 * 2); // hdma table was moved
+  ZeldaApuUnlock();
+  EmuSynchronizeWholeState();
+  if (!g_rw_loaded) {
+    HdResetAfterLoad(&st, true);
+  } else {
+    // the next steps: only the saved HD state, the area images stay
+    HdState_IO(&loadFunc, &st);
+    HdBurn_Loaded();
+    HdWorld_MemoryLoaded(false);
+    HdAnim_IO(&loadFunc, &st, true);
+  }
+  LoadFuncState anim = { g_rw_anim.data, g_rw_anim.data + g_rw_anim.size };
+  HdAnim_DrawIO(&loadFunc, &anim);
+  g_rw_loaded = true;
+  g_rewind_frame = true;  // no rumble from a frame played again
+  ZeldaRunFrame(inputs);
+  g_rewind_frame = false;
+  return true;
+}
+
+// Key released: the music goes on from the frame reached
+void Rewind_End(void) {
+  if (!g_rw_loaded)
+    return;
+  g_rw_loaded = false;
+  ZeldaApuLock();
+  ZeldaRestoreMusicAfterLoad_Locked(false);
+  ZeldaApuUnlock();
+}
+
 bool ZeldaRunFrame(int inputs) {
 
   // Avoid up/down and left/right from being pressed at the same time
@@ -1287,9 +1685,11 @@ bool ZeldaRunFrame(int inputs) {
         StateRecorder_RecordPatchByte(&state_recorder, kRam_BugsFixed, &g_ram[kRam_BugsFixed], 1);
       }
 
-      if (enhanced_features0 != g_wanted_zelda_features) {
-        uint32 changed = enhanced_features0 ^ g_wanted_zelda_features;
-        enhanced_features0 = g_wanted_zelda_features;
+      // the modern item menu has the bottles always shown: extended inventory
+      uint32 wanted = g_wanted_zelda_features | (HdInv_Option() ? kFeatures0_ExtendedInventory : 0);
+      if (enhanced_features0 != wanted) {
+        uint32 changed = enhanced_features0 ^ wanted;
+        enhanced_features0 = wanted;
         if (changed & kFeatures0_ExtendedInventory)
           Hud_ChangeInventoryStyle((enhanced_features0 & kFeatures0_ExtendedInventory) != 0);
         if (changed & kFeatures0_IcePalaceGba)
@@ -1397,6 +1797,16 @@ void SaveLoadSlot(int cmd, int which) {
     // setting: the state of the world in it depends on that option
     if (cmd == kSaveLoad_Load && !(which & 256) && animated_tile_data_src != 0)
       HdMenu_SetContinuousWorld((enhanced_features0 & kFeatures0_ContinuousWorld) != 0);
+    // the palette in the save is the one of the Link sprite in use when it
+    // was made: Link takes the colors of the sprite chosen now (LinkGraphics)
+    if (cmd == kSaveLoad_Load && HdFx_GameLoaded()) {
+      if (link_is_bunny) {
+        LoadGearPalettes_bunny();
+      } else {
+        LoadActualGearPalettes();
+        Palette_UpdateGlovesColor();
+      }
+    }
   }
 }
 
@@ -1442,6 +1852,7 @@ void PatchCommand(char c) {
     StateRecoderMultiPatch_Patch(&mp, 0xf360, rupees);  // link_rupees_goal
     StateRecoderMultiPatch_Patch(&mp, 0xf361, rupees >> 8);  // link_rupees_goal
   } else if (c == 'k') {
+    Rewind_Clear();  // the frames kept hold positions in the old key log
     StateRecorder_ClearKeyLog(&state_recorder);
   } else if (c == 'o') {
     StateRecoderMultiPatch_Patch(&mp, 0xf36f, 1);

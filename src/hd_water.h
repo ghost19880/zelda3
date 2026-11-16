@@ -52,6 +52,9 @@ bool HdWater_IsTubColor(uint32 c);
 // Village troughs: tile 0x126/0x127 with palette 7 over the same tile + 0x10
 // (map8 entries); for the game they are wall, the HD water fills them
 bool HdWater_IsTroughPair(int top, int bottom);
+// Rocks in the water: 8x8 tile entry 0x1e1 (top) or 0x1cf (bottom) with
+// palette 7 (stumps in the swamp); wall for the game, water around the rock
+bool HdWater_IsRockEntry(int e);
 // Sul Monte della Morte (chiaro e oscuro) il vuoto oltre i dirupi e' "acqua
 // profonda" per il gioco, ma sullo schermo e' il cielo con le nuvole (marcate
 // anche loro come layer 7): li' l'acqua HD non si disegna e non si congela.
@@ -61,5 +64,10 @@ bool HdWater_IsSky(int wx, int wy);
 // in the neighbouring areas with the continuous world; -1 if unknown
 int HdWater_OwEntry(int wx, int wy);
 bool HdWater_IsFallCellAt(int wx, int wy);
+
+// Rewind and quick saves: what moves with time (zelda_rtl.c HdAnim_IO),
+// saved and loaded with the game
+#include "snes/saveload.h"
+void HdWater_RewindIO(SaveLoadFunc *func, void *ctx);
 
 #endif  // ZELDA3_HD_WATER_H_

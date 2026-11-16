@@ -1074,6 +1074,7 @@ static bool IsTimedDrop(int k) {
 // resterebbero illuminate
 static ArrowRec g_room_arrows[kMaxArrows];
 static int g_room_n_arrows, g_room_arrows_room = -1;
+static bool g_arrows_loaded;  // HdWorld_MemoryLoaded: HdWorld_AfterLoad keeps them
 
 static void ForgetEnemies(int i) {
   g_states[i].n_killed = g_states[i].n_alive = 0;
@@ -2043,6 +2044,9 @@ enum { kAnimTileFirst = 0x1c0, kAnimTileEnd = 0x200 };
 static AreaImage g_images[kMaxImages];
 static uint32 g_use_counter;
 static int g_renders_this_frame;
+// After loading a game every image is drawn again: the first frame draws all
+// those it needs (two a frame left a flat area on the screen for a frame)
+static bool g_render_all_next, g_render_all;
 
 static uint32 AreaKey(int head) {
   return 1u << 31 | (uint32)sram_progress_indicator << 16 |
@@ -2374,7 +2378,7 @@ static AreaImage *GetAreaImage(int head) {
       free_img = img;
   }
   // al massimo due aree nuove per frame, per non rallentare
-  if (g_renders_this_frame >= 2)
+  if (g_renders_this_frame >= 2 && !g_render_all)
     return NULL;
   g_renders_this_frame++;
   AreaImage *img = free_img;
@@ -3199,14 +3203,47 @@ static void InsertPending(void) {
   g_n_pending = 0;
 }
 
+// Memory of the continuous world (changed tiles, defeated and moved enemies,
+// enemies held or on the way home) and the arrows stuck in the room walls go
+// with the game in quick saves and in the rewind (zelda_rtl.c HdState_IO);
+// the same calls save and load. The looks of the enemies (g_patches) are
+// pictures taken from the screen: they are not saved
+void HdWorld_MemoryIO(SaveLoadFunc *func, void *ctx) {
+#define F(v) func(ctx, &v, sizeof(v));
+  F(g_any_state) F(g_states) F(g_hold) F(g_revived) F(g_homing) F(g_n_homing) F(g_mem_world)
+  F(g_room_arrows) F(g_room_n_arrows) F(g_room_arrows_room)
+#undef F
+}
+
+// After HdWorld_MemoryIO has loaded. new_epoch: every area image is drawn
+// again (a loaded game); without it (a rewind step) an image stays good for
+// the same version of its area, as the versions only go up while playing
+void HdWorld_MemoryLoaded(bool new_epoch) {
+  if (new_epoch)
+    g_state_epoch++, g_render_all_next = true;
+  g_arrows_loaded = true;
+  // a picture of an enemy is kept only for the same enemy in the same place of the list
+  for (int a = 0; a < 128; a++)
+    for (int j = 0; j < kMaxAlive; j++) {
+      EnemyPatch *p = &g_patches[a][j];
+      if (p->valid && (j >= g_states[a].n_alive || p->blk != g_states[a].alive[j].blk))
+        p->valid = false;
+    }
+}
+
 // Dopo il caricamento di un salvataggio (il mondo persistente e' ripartito
 // da zero): chi seguiva Link resta sconfitto nella sua area
 void HdWorld_AfterLoad(void) {
+  g_render_all_next = true;
   // the free view starts again from the loaded game (not from the old view)
   g_vis_valid = false, g_vis_glide = false;
   g_prev_area = -1, g_prev_module = main_module_index;
   g_world_dx = g_world_dy = 0;
-  g_room_n_arrows = 0;  // le frecce della stanza non vengono dal salvataggio
+  // the arrows stuck in the room walls come from the save only with the HD
+  // state (HdWorld_MemoryIO), not from old saves
+  if (!g_arrows_loaded)
+    g_room_n_arrows = 0;
+  g_arrows_loaded = false;
   memset(g_guests, 0, sizeof(g_guests));
   memset(g_carried, 0, sizeof(g_carried));
   memset(g_thrown, 0, sizeof(g_thrown));
@@ -4362,6 +4399,8 @@ static void DrawNeighborCanopy(uint8 *pixels, int pitch, int width, int height, 
 
 void HdWorld_Composite(uint8 *pixels, int pitch, int width, int height) {
   g_renders_this_frame = 0;
+  g_render_all = g_render_all_next;
+  g_render_all_next = false;
   GuestRestoreOam();
   // frecce della stanza dimenticate cambiando stanza o uscendo
   int room = player_is_indoors ? dungeon_room_index : -1;
@@ -4449,4 +4488,51 @@ void HdWorld_Composite(uint8 *pixels, int pitch, int width, int height) {
   }
   DrawNeighborCanopy(pixels, pitch, width, height, cam_x, cam_y, &ov);
   PrefetchNeighbors();
+}
+
+// Rewind and quick saves (zelda_rtl.c HdAnim_IO): the view and the enemies
+// following Link or coming into his area go back with the game; the same
+// calls save and load
+void HdWorld_RewindIO(SaveLoadFunc *func, void *ctx) {
+#define F(v) func(ctx, &v, sizeof(v));
+  F(g_world_dx) F(g_world_dy) F(g_vis_x) F(g_vis_y) F(g_last_lx) F(g_last_ly) F(g_vis_valid)
+  F(g_prev_module) F(g_prev_area) F(g_prev_mosaic) F(g_vis_glide) F(g_ease_x) F(g_ease_y)
+  F(g_scroll_dir_x) F(g_scroll_dir_y) F(g_last_head) F(g_trail) F(g_bright)
+  F(g_sight_k) F(g_sight_sees) F(g_sight_lost) F(g_sight_lx) F(g_sight_ly) F(g_sight_px) F(g_sight_py)
+  F(g_sight_hp) F(g_sight_state) F(g_sight_alert)
+  F(g_guests) F(g_pending) F(g_n_pending) F(g_pending_room) F(g_area_gfx) F(g_area_gfx_valid)
+  F(g_chase) F(g_chase_type) F(g_carried) F(g_chase_x) F(g_chase_y) F(g_thrown) F(g_left)
+  F(g_flyer_away) F(g_flyer_home) F(g_flyer_type) F(g_flyer_left) F(g_handoff) F(g_n_handoff)
+  F(g_hd_spawner) F(g_normal_arrows_area)
+#undef F
+}
+
+// The live copies of the areas around (their enemies keep moving), with
+// HdWorld_RewindIO; only the ones in use, so the size changes. load: the
+// copies get their memory first if they never had it
+void HdWorld_LiveIO(SaveLoadFunc *func, void *ctx, bool load) {
+#define F(v) func(ctx, &v, sizeof(v));
+  for (int i = 0; i < kMaxLive; i++) {
+    LiveArea *la = &g_live[i];
+    F(la->used)
+    if (!la->used)
+      continue;
+    if (load && ((!la->ram && !(la->ram = malloc(sizeof(g_saved_ram)))) ||
+                 (!la->ppu && !(la->ppu = malloc(sizeof(Ppu))))))
+      Die("out of memory\n");
+    F(la->head) F(la->key) F(la->near) F(la->chase) F(la->chase_type) F(la->cast)
+    F(la->hide_shadow) F(la->marks_on)
+    func(ctx, la->ram, sizeof(g_saved_ram));
+    // not the lines being drawn (bgBuffers, objBuffer): they change all the time
+    func(ctx, la->ppu, offsetof(Ppu, bgBuffers));
+    func(ctx, la->ppu->vram, sizeof(Ppu) - offsetof(Ppu, vram));
+    if (load)  // its sprites are drawn again at its next step
+      la->fresh = la->drawn = la->shadow_on = false;
+  }
+#undef F
+}
+
+// A saved HD state that could not be loaded: no live copies
+void HdWorld_DropLive(void) {
+  LiveDropAll();
 }

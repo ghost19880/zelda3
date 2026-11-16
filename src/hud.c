@@ -5,6 +5,7 @@
 #include "messaging.h"
 #include "hud_it.h"
 #include "config.h"
+#include "hd_inv.h"
 
 // Inventario esteso a 6 colonne (opzione ExtendedInventory), altrimenti
 // quello originale a 5 colonne
@@ -541,7 +542,14 @@ void Hud_Init() {  // 8dddab
 }
 
 void Hud_BringMenuDown() {  // 8dde59
-  BG3VOFS_copy2 -= 8;
+  // modern item menu: the original menu is not drawn and the scroll only
+  // times the opening, shorter (HdInv_MenuStep frames instead of 29)
+  if (HdInv_Enabled()) {
+    int v = (int16)BG3VOFS_copy2 - HdInv_MenuStep();
+    BG3VOFS_copy2 = v < -232 ? 0xff18 : (uint16)v;
+  } else {
+    BG3VOFS_copy2 -= 8;
+  }
   if (BG3VOFS_copy2 == 0xff18)
     overworld_map_state++;
 }
@@ -668,6 +676,45 @@ static void Hud_EquipItemBelow(uint8 *item) {  // 8ddf00
   *item = old;
 }
 
+// Modern item menu with more buttons than Y: the item is put on button i
+// (0 Y, 1 X, 2 L, 3 R); if it was on another button, the two buttons swap
+// their items. Y is never left empty (the game refills it when the menu
+// opens): moving its item to an empty button, Y takes the next item Link has
+// that is on no button, or else the item of another button, which empties.
+// false if nothing changed
+bool Hud_AssignItem(int i, int item) {
+  uint8 *p = GetCurrentItemButtonPtr(i);
+  if (!item || !Hud_ButtonTakesItems(i) || !Hud_DoWeHaveThisItem(item) || *p == item)
+    return false;
+  if (i != 0 && hud_cur_item == item && !*p) {
+    uint8 it = item, fill = 0;
+    for (int n = 0; n < kHudItemCount && !fill; n++) {
+      Hud_GotoNextItem(&it, 1);
+      if (it != item && Hud_DoWeHaveThisItem(it) && !Hud_ItemOnOtherButton(&hud_cur_item, it))
+        fill = it;
+    }
+    for (int j = 1; j < 4 && !fill; j++) {
+      uint8 *q = GetCurrentItemButtonPtr(j);
+      if (j != i && Hud_ButtonTakesItems(j) && *q && *q != item)
+        fill = *q, *q = 0;
+    }
+    if (!fill)
+      return false;  // Link has nothing else for Y
+    *p = item;
+    hud_cur_item = fill;
+    timer_for_flashing_circle = 16;
+    return true;
+  }
+  for (int j = 0; j < 4; j++) {
+    uint8 *q = GetCurrentItemButtonPtr(j);
+    if (q != p && *q == item)
+      *q = *p;
+  }
+  *p = item;
+  timer_for_flashing_circle = 16;
+  return true;
+}
+
 int GetCurrentItemButtonIndex() {
   if (Hud_ItemOnX() && (joypad1L_last & kJoypadL_X))
     return 1;
@@ -701,6 +748,14 @@ void Hud_NormalMenu() {  // 8ddf15
     BG3VOFS_copy2 = -8;
     Hud_CloseMenu();
     DisplaySelectMenu();
+    return;
+  }
+
+  // modern item menu: page change and the Quest page take the arrows
+  if (HdInv_HandleInput()) {
+    BYTE(hud_tmp1) = filtered_joypad_H;
+    nmi_subroutine_index = 1;
+    BYTE(nmi_load_target_addr) = 0x22;
     return;
   }
 
@@ -815,7 +870,12 @@ void Hud_UpdateEquippedItem() {  // 8ddfaf
 }
 
 void Hud_CloseMenu() {  // 8ddfba
-  BG3VOFS_copy2 += 8;
+  if (HdInv_Enabled()) {
+    int v = (int16)BG3VOFS_copy2 + HdInv_MenuStep();
+    BG3VOFS_copy2 = v > 0 ? 0 : (uint16)v;
+  } else {
+    BG3VOFS_copy2 += 8;
+  }
   if (BG3VOFS_copy2)
     return;
   Hud_Rebuild();
@@ -1038,6 +1098,74 @@ bool Hud_HaveItem(int item) {
 
 const uint16 *Hud_GetSwordIconTiles(void) {
   return kHudItemSword[link_sword_type == 0xff || link_sword_type > 4 ? 0 : link_sword_type].v;
+}
+
+int Hud_MenuColumns(void) {
+  return kNewStyleInventory ? 6 : 5;
+}
+
+int Hud_MenuSlotCount(void) {
+  return kHudItemCount;
+}
+
+int Hud_MenuItemAt(int slot) {
+  return Hud_SlotItem(slot);
+}
+
+int Hud_MenuSlotOf(int item) {
+  return Hud_GetItemPosition(item);
+}
+
+const uint16 *Hud_GetBottleIconTiles(int contents) {
+  return kHudItemBottles[contents >= 0 && contents <= 9 ? contents : 0].v;
+}
+
+// The tiles of the original inventory boxes (Hud_DrawProgressIcons_Pendants,
+// Hud_DrawProgressIcons_Crystals and Hud_DrawEquipmentBox)
+const uint16 *Hud_GetQuestIconTiles(int what) {
+  static const uint16 kPendants[3][4] = {
+    {0x252b, 0x252c, 0x252d, 0x252e}, {0x2d2b, 0x2d2c, 0x2d2d, 0x2d2e}, {0x3d2b, 0x3d2c, 0x3d2d, 0x3d2e},
+  };
+  static const uint16 kCrystal[4] = { 0x2d44, 0x2d45, 0x24f5, 0x24f5 };
+  static const uint16 kHeartPieces[4][4] = {
+    {0x2484, 0x6484, 0x2485, 0x6485}, {0x24ad, 0x6484, 0x2485, 0x6485},
+    {0x24ad, 0x6484, 0x24ae, 0x6485}, {0x24ad, 0x64ad, 0x24ae, 0x6485},
+  };
+  static const uint16 kPalaceItem[2][4] = {
+    {0x28d6, 0x68d6, 0x28e6, 0x28e7}, {0x354b, 0x354c, 0x354d, 0x354e},
+  };
+  static const uint16 kMap[4] = { 0x28de, 0x28df, 0x28ee, 0x28ef };
+  static const uint16 kCompass[4] = { 0x24bf, 0x64bf, 0x2ccf, 0x6ccf };
+  int palace = cur_palace_index_x2 != 0xff ? cur_palace_index_x2 >> 1 : -1;
+  switch (what) {
+  case kHudQuest_Sword:
+    return link_sword_type >= 1 && link_sword_type <= 4 ? kHudItemSword[link_sword_type].v : NULL;
+  case kHudQuest_Shield:
+    return link_shield_type >= 1 && link_shield_type <= 3 ? kHudItemShield[link_shield_type].v : NULL;
+  case kHudQuest_Armor:
+    return kHudItemArmor[link_armor <= 2 ? link_armor : 0].v;
+  case kHudQuest_Boots:
+    return link_item_boots ? kHudItemBoots[1].v : NULL;
+  case kHudQuest_Gloves:
+    return link_item_gloves ? kHudItemGloves[link_item_gloves >= 2 ? 2 : 1].v : NULL;
+  case kHudQuest_Flippers:
+    return link_item_flippers ? kHudItemFlippers[1].v : NULL;
+  case kHudQuest_MoonPearl:
+    return link_item_moon_pearl ? kHudItemMoonPearl[1].v : NULL;
+  case kHudQuest_HeartPieces:
+    return kHeartPieces[link_heart_pieces & 3];
+  case kHudQuest_Map:
+    return palace >= 0 && (link_dungeon_map << palace) & 0x8000 ? kMap : NULL;
+  case kHudQuest_Compass:
+    return palace >= 0 && (link_compass << palace) & 0x8000 ? kCompass : NULL;
+  case kHudQuest_BigKey:
+    return palace >= 0 && (link_bigkey << palace) & 0x8000 ? kPalaceItem[CheckPalaceItemPosession() & 1] : NULL;
+  case kHudQuest_Pendant0: case kHudQuest_Pendant1: case kHudQuest_Pendant2:
+    return link_which_pendants >> (what - kHudQuest_Pendant0) & 1 ? kPendants[what - kHudQuest_Pendant0] : NULL;
+  }
+  if (what >= kHudQuest_Crystal0 && what < kHudQuest_Crystal0 + 7)
+    return link_has_crystals >> (what - kHudQuest_Crystal0) & 1 ? kCrystal : NULL;
+  return NULL;
 }
 
 static const ItemBoxGfx *Hud_GetIconForItem(int i) {

@@ -258,8 +258,10 @@ uint8 HdBurn_WaterCells(uint16 x, uint16 y) {
 
 // Cells of the tile that freeze: the game's water (HdBurn_WaterCells) and the
 // water that is only drawn, which the HD water fills (village troughs: the
-// tile is 0x126/0x127 over 0x136/0x137). The ice covers only the pixels drawn
-// as water of these cells (HdFx_FrozenWater), not the trough's rim
+// tile is 0x126/0x127 over 0x136/0x137; the rocks in the water, whose cells
+// are wall: the ice went round them and left the water of those cells). The
+// ice covers only the pixels drawn as water of these cells (HdFx_FrozenWater),
+// not the trough's rim or the rock
 static uint8 FreezableCells(uint16 x, uint16 y) {
   uint8 mask = HdBurn_WaterCells(x, y);
   if (player_is_indoors) {
@@ -276,6 +278,9 @@ static uint8 FreezableCells(uint16 x, uint16 y) {
   for (int i = 0; i < 2; i++)
     if (HdWater_IsTroughPair(m8[i], m8[i + 2]))
       mask |= 1 << i | 1 << (i + 2);
+  for (int i = 0; i < 4; i++)
+    if (HdWater_IsRockEntry(m8[i]))
+      mask |= 1 << i;
   return mask;
 }
 
@@ -750,14 +755,40 @@ bool HdBurn_IsFrozenAt(uint16 x, uint16 y) {
   return f >= 0 && (g_frozen[f].water || IsBurnable(x, y));
 }
 
-void HdBurn_Reset(void) {
-  IndoorClear(true);
+static void ResetAll(bool restore) {
+  IndoorClear(restore);
   ClearAll();
   g_num_scorched = 0;
   g_num_frozen = 0;
   g_frozen_ver++;
   g_num_wet = 0;
   g_leaving_area = 0xffff;
+}
+
+void HdBurn_Reset(void) {
+  ResetAll(true);
+}
+
+// Before loading a game: the water frozen indoors is already in the loaded
+// RAM as it was, it must not be turned back into water there
+void HdBurn_Forget(void) {
+  ResetAll(false);
+}
+
+// Fires, burnt and frozen tiles go with the game in quick saves and in the
+// rewind (zelda_rtl.c HdState_IO); the same calls save and load
+void HdBurn_SaveLoad(SaveLoadFunc *func, void *ctx) {
+#define F(v) func(ctx, &v, sizeof(v));
+  F(g_pending) F(g_num_pending) F(g_burning) F(g_spread_at) F(g_fire_of) F(g_fire_next)
+  F(g_num_burning) F(g_scorched) F(g_num_scorched) F(g_frozen) F(g_num_frozen)
+  F(g_wet) F(g_num_wet) F(g_burn_area) F(g_seen_area) F(g_ice_area) F(g_leaving_area)
+  F(g_sfx_timer) F(g_burn_rng) F(g_in_orig) F(g_in_room)
+#undef F
+}
+
+// After HdBurn_SaveLoad has loaded: the index of the frozen tiles is rebuilt
+void HdBurn_Loaded(void) {
+  g_frozen_ver++;
 }
 
 // Link e' entrato in un'area dove il fuoco era arrivato da un'area vicina:

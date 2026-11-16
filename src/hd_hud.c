@@ -22,6 +22,7 @@
 #include "messaging.h"
 #include "util.h"
 #include "hud_it.h"
+#include "hd_inv.h"
 
 const uint16 *Hud_GetItemIconTiles(int item);
 const uint16 *Hud_GetSwordIconTiles(void);
@@ -673,6 +674,9 @@ void HdHud_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
     magic_seen = true;
   bool in_dialog = false, in_menu = InItemMenu();
   if (!ModernHudOn() || (!in_menu && !HudContext(&in_dialog)))
+    return;
+  // modern item menu: no HUD while it is open
+  if (HdInv_Enabled())
     return;
   Ppu *ppu = g_zenv.ppu;
   if (!(ppu->screenEnabled[0] & 4) || ppu->mode == 7)

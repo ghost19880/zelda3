@@ -510,7 +510,7 @@ static bool SpriteLight(const HdShownSprite *s, float *radius, int *kind) {
     return false;
   case 0x2b:
     // the hobo's campfire under the bridge (sprite_subtype2 2; 0 is the
-    // hobo, 1 his bubble, 3 the smoke): light and embers; in daylight the
+    // hobo, 1 his bubble, 3 the smoke): light, no embers; in daylight the
     // light is weak, the warm halo is hd_fx.c ApplyCampfireGlow
     if (sprite_subtype2[k] != 2)
       return false;
@@ -611,6 +611,18 @@ static void CollectSpriteLights(bool dark, int ext, int cam_x, int cam_y, float 
         continue;
       }
       radius *= 1.0f + 0.08f * sinf(t * 2.1f + (s->k >= 0 ? s->k : i));
+      if (s->type == 0x2b) {
+        // the hobo's campfire: the light from the base of the flame, in the
+        // middle of the logs (a 16x16 background block, as in hd_fx.c
+        // ApplyCampfireGlow), and no embers: the game draws its own smoke
+        x = (float)(((s->x + 4) & ~15) + 8 - cam_x + ext);
+        y = (float)(((s->y + 8) & ~15) + 5 - cam_y);
+        // flickering with the flame (hd_fx.c), not on its own
+        float p = s->k >= 0 ? HdFx_CampfirePulse(s->k) : 1.0f;
+        float r = 44 * (0.9f + 0.1f * p) * m;
+        AddLight(x, y, r, 0.60f * p * m, 0.36f * p * m, 0.12f * p * m);
+        continue;
+      }
       if (kind == kLitCold)
         AddLight(x, y, radius * m, 0.30f * m, 0.40f * m, 0.75f * m);
       else if (kind == kLitLaser)
@@ -1220,4 +1232,13 @@ void HdLight_ResetAfterLoad(void) {
   g_ambient_place = -1;
   g_fade_dark = false;
   g_dark_hold = 0;
+}
+
+// Rewind and quick saves (zelda_rtl.c HdAnim_IO): the light of the room (it changes slowly)
+// and the torches found go back with the game; the same calls save and load
+void HdLight_RewindIO(SaveLoadFunc *func, void *ctx) {
+#define F(v) func(ctx, &v, sizeof(v));
+  F(g_decor) F(g_num_decor) F(g_decor_room) F(g_decor_scan_timer)
+  F(g_ambient) F(g_ambient_sub) F(g_ambient_place) F(g_fade_dark) F(g_dark_hold) F(g_snap_pending)
+#undef F
 }
