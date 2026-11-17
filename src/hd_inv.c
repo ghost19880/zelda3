@@ -3,7 +3,7 @@
 // Two pages over the darkened game: Items (the grid of the extended
 // inventory, with the four bottles always shown in one column) and Quest
 // (equipment, the dungeon items while Link is in a dungeon, pendants and
-// crystals). Light stone panel with a thin border, rounded slots, the icons
+// crystals). Black panel with a thin border, rounded slots, the icons
 // of the game (decoded from the HUD tiles in VRAM, as the modern HUD does)
 // and the name of what the cursor is on, in capitals, centred, in one size
 // for every name. Places of things Link does not have yet stay empty, without
@@ -12,8 +12,10 @@
 //
 // As in the menus of the GBA Zelda games, an arrow on each side of the panel
 // shows the way to the other page, with L/R on it when those buttons are not
-// used for items: L/R change page, or the arrows past the edge of the page
-// put the cursor on the side arrow and pressing on (or A) changes page.
+// used for items: then L/R are the only way to change page. When L/R hold
+// items, the arrows past the edge of the page light the side arrow (the
+// cursor stays on the last place) and pressing on (or A) changes page. Each
+// page keeps its cursor.
 // Opening and closing follow the scroll of the original menu (made shorter,
 // HdInv_MenuStep): the game fades darker and the panel fades in, coming down
 // a few whole pixels. The pages slide sideways.
@@ -611,20 +613,28 @@ static void Digits(const char *s, float right, float bottom, uint32 col) {
 }
 
 // ---------------------------------------------------------------------------
-// Style ("light stone")
+// Style ("black": dark like the other HD panels, where the game's icons,
+// drawn for the dark SNES menu, stand out)
 
 enum {
-  kColPanelTop = 0xe2dcd6, kColPanelBottom = 0xccc5be, kColBorder = 0x786c64,
-  kColInner = 0xfaf6f0, kColSlot = 0xb6aea8, kColSlotEdge = 0x968d86,
-  kColSlotHi = 0xece7e1, kColInk = 0x463a34, kColInkSoft = 0x766860,
-  kColAccent = 0xe87028, kColTabOff = 0xc4bdb6, kColTabInk = 0x60544e,
-  kColTabOn = 0x786c64, kColTabOnInk = 0xfffaf4, kColBadgeInk = 0xffffff,
+  kColPanelTop = 0x181818, kColPanelBottom = 0x0c0c0c, kColBorder = 0x000000,
+  kColInner = 0x363636, kColSlot = 0x282828, kColSlotEdge = 0x060606,
+  kColSlotHi = 0x404040, kColInk = 0xf2f2f2, kColInkSoft = 0xa8a8a8,
+  kColAccent = 0xe87028, kColTabOff = 0x181818, kColTabInk = 0x9c9c9c,
+  kColTabOn = 0x5a5a5a, kColTabOnInk = 0xffffff, kColBadgeInk = 0xffffff,
+  // slot of an item on a button, with more than one item button (as in The
+  // Minish Cap)
+  kColSlotUsed = 0x5a4a2c, kColSlotUsedHi = 0x7c6844,
 };
 
-static void Slot(float x, float y, float w, float h) {
-  RoundRect(x, y, w, h, 3, 0, kColSlot, kColSlot, 1);
+static void SlotColor(float x, float y, float w, float h, uint32 fill, uint32 hi) {
+  RoundRect(x, y, w, h, 3, 0, fill, fill, 1);
   RoundRect(x + 0.25f, y + 0.25f, w - 0.5f, h - 0.5f, 3, 0.5f, kColSlotEdge, kColSlotEdge, 1);
-  RoundRect(x + 1, y + h - 1.2f, w - 2, 0.6f, 0.3f, 0, kColSlotHi, kColSlotHi, 0.8f);
+  RoundRect(x + 1, y + h - 1.2f, w - 2, 0.6f, 0.3f, 0, hi, hi, 0.8f);
+}
+
+static void Slot(float x, float y, float w, float h) {
+  SlotColor(x, y, w, h, kColSlot, kColSlotHi);
 }
 
 static void RoundPlace(float cx, float cy, float r) {
@@ -644,10 +654,17 @@ static void Cursor(float x, float y, float w, float h) {
 }
 
 // Button an item is on (Y, X, L, R): a small badge in the top right corner
+// Button badges in the colours of the controller, as the buttons of the
+// modern HUD (HdHud_ButtonColor; L and R grey as the shoulders); a dark ring
+// keeps them apart from the slot and the icon
 static void Badge(float x, float y, char ch) {
-  Circle(x, y, 4, 0, kColAccent, 1);
+  uint32 col = ch == 'L' || ch == 'R' ? 0x7a7a7a : HdHud_ButtonColor(ch);
+  Circle(x, y, 4.75f, 0, 0x000000, 1);
+  Circle(x, y, 4, 0, col, 1);
   char s[2] = { ch, 0 };
-  SmallText(s, x - SmallW(s) / 2.0f, y - 2.5f, kColBadgeInk);
+  // dark letter on a light badge (the lavender of the American controller)
+  int lum = ((col >> 16 & 0xff) * 3 + (col >> 8 & 0xff) * 6 + (col & 0xff)) / 10;
+  SmallText(s, x - SmallW(s) / 2.0f, y - 2.5f, lum > 160 ? 0x202020 : kColBadgeInk);
 }
 
 // Size of the names (output pixels a font pixel): the one that fits the
@@ -719,10 +736,18 @@ static void DrawItemsPage(float x, float y) {
     Slot(gx + (b0 % cols) * (kSlot + kGap), gy + (b0 / cols) * (kSlot + kGap), kSlot, 3 * (kSlot + kGap) + kSlot);
   for (int i = 0; i < count; i++) {
     float sx = gx + (i % cols) * (kSlot + kGap), sy = gy + (i / cols) * (kSlot + kGap);
-    if (!(strip && i >= b0 && i <= b1 && i % cols == b0 % cols))
-      Slot(sx, sy, kSlot, kSlot);
     int item = Hud_MenuItemAt(i);
-    if (!Hud_HaveItem(item))
+    bool have = Hud_HaveItem(item);
+    // with more than one item button, the items on a button have a lighter
+    // slot (also inside the bottle column)
+    bool used = have && FreeCursor() && (item == hud_cur_item ||
+        (Hud_ItemOnX() && item == hud_cur_item_x) ||
+        (Hud_ItemOnLR() && (item == hud_cur_item_l || item == hud_cur_item_r)));
+    if (used)
+      SlotColor(sx, sy, kSlot, kSlot, kColSlotUsed, kColSlotUsedHi);
+    else if (!(strip && i >= b0 && i <= b1 && i % cols == b0 % cols))
+      Slot(sx, sy, kSlot, kSlot);
+    if (!have)
       continue;
     DrawIcon(Hud_GetItemIconTiles(item), sx + kSlot / 2.0f, sy + kSlot / 2.0f);
     // counts of arrows and bombs, as in the modern HUD
@@ -746,7 +771,7 @@ static void DrawItemsPage(float x, float y) {
     if (Hud_ItemOnLR() && item == hud_cur_item_l) Badge(bx, by, 'L'), bx -= 9;
     if (Hud_ItemOnLR() && item == hud_cur_item_r) Badge(bx, by, 'R');
   }
-  if (cs >= 0 && !bottle_menu && !g_arrow)
+  if (cs >= 0 && !bottle_menu)
     Cursor(gx + (cs % cols) * (kSlot + kGap), gy + (cs / cols) * (kSlot + kGap), kSlot, kSlot);
   // original inventory (only for a moment, the option brings the extended
   // one): the bottle menu, a column of the four bottles beside the slot
@@ -801,16 +826,17 @@ static void DrawQuestPage(float x, float y) {
       Digits(buf, cx + kSlot / 2.0f - 2, cy + kSlot / 2.0f - 2, 0xf8f8f8);
     }
   }
-  if (g_arrow)
-    return;
   if (g_qcur >= kQuestCount || !QuestVisible(g_qcur))
     g_qcur = 0;
   const QuestPlace *c = &kQuest[g_qcur];
   float cx = x + c->x, cy = y + c->y;
+  // the cursor stays on the place also while a side arrow is lit
   if (c->r > 0)
     Cursor(cx - c->r, cy - c->r, 2 * c->r, 2 * c->r);
   else
     Cursor(cx - kSlot / 2.0f, cy - kSlot / 2.0f, kSlot, kSlot);
+  if (g_arrow)
+    return;
   const char *name = QuestName(c->what);
   char crystal[48];
   if (c->what >= kHudQuest_Crystal0 && c->what < kHudQuest_Crystal0 + 7) {
@@ -950,8 +976,6 @@ void HdInv_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   float acy = floorf(ay + kPageH / 2.0f);
   SideArrow(px, acy, -1);
   SideArrow(px + kPanelW, acy, 1);
-  if (g_arrow)
-    Cursor(ArrowX(g_arrow < 0 ? px : px + kPanelW, g_arrow), acy - kArrowH / 2.0f, kArrowW, kArrowH);
 }
 
 // ---------------------------------------------------------------------------
@@ -988,36 +1012,6 @@ static int QuestStep(int from, int dx, int dy) {
   return best;
 }
 
-// Entering the Quest page from one side: the place nearest to row `row` (0-3)
-// of the item grid, on the left edge or on the right edge
-static int QuestEnter(bool from_left, int row) {
-  float ty = (kPageH - kGridH) / 2 + row * (kSlot + kGap) + kSlot / 2.0f;
-  int best = 0;
-  float best_d = 1e9f;
-  for (int i = 0; i < kQuestCount; i++) {
-    if (!QuestVisible(i))
-      continue;
-    float edge = from_left ? kQuest[i].x : kGridW - kQuest[i].x;
-    float d = edge * 4 + fabsf(kQuest[i].y - ty);
-    if (d < best_d)
-      best_d = d, best = i;
-  }
-  return best;
-}
-
-// Row of the item grid at the height of the Quest page cursor
-static int QuestRow(void) {
-  float top = (kPageH - kGridH) / 2.0f;
-  int row = (int)((kQuest[g_qcur < kQuestCount ? g_qcur : 0].y - top) / (kSlot + kGap));
-  return row < 0 ? 0 : row > 3 ? 3 : row;
-}
-
-// Row of the item grid the cursor is on
-static int ItemsRow(void) {
-  int slot = CursorSlot();
-  return slot < 0 ? 0 : slot / Hud_MenuColumns();
-}
-
 // Nearest slot with an item Link has from slot in direction (dx, dy), by
 // position; -1 if there is none that way
 static int ItemStep(int slot, int dx, int dy) {
@@ -1034,37 +1028,14 @@ static int ItemStep(int slot, int dx, int dy) {
   return best;
 }
 
-// Entering the Items page from one side: the item Link has nearest to that
-// edge and to grid row row; -1 if he has none
-static int ItemEnter(bool from_left, int row) {
-  int cols = Hud_MenuColumns(), count = Hud_MenuSlotCount(), best = -1, best_d = 1 << 30;
-  for (int k = 0; k < count; k++) {
-    if (!Hud_HaveItem(Hud_MenuItemAt(k)))
-      continue;
-    int edge = from_left ? k % cols : cols - 1 - k % cols, dr = k / cols - row;
-    int d = edge * 4 + (dr < 0 ? -dr : dr);
-    if (d < best_d)
-      best_d = d, best = k;
-  }
-  return best;
-}
-
-// Changes page; the new one comes in from side dir
+// Changes page; the new one comes in from side dir. Each page keeps its
+// cursor where it was (L/R or a side arrow)
 static void SwitchPage(int dir) {
-  int row = g_page == kPageItems ? ItemsRow() : QuestRow();
   g_page ^= 1;
   g_slide = kSlideFrames;
   g_slide_dir = dir;
   g_arrow = 0;
   g_pop = kPopFrames, g_pop_dir = dir;
-  if (g_page == kPageQuest)
-    g_qcur = QuestEnter(dir > 0, row), g_qfrom = -1;
-  else if (FreeCursor()) {
-    // the free cursor comes in on the item nearest to the side it enters from
-    int k = ItemEnter(dir > 0, row);
-    if (k >= 0)
-      g_icur = k;
-  }
   sound_effect_2 = 32;
 }
 
@@ -1105,12 +1076,12 @@ bool HdInv_HandleInput(void) {
     }
     // the arrows go to the nearest item Link has that way, as with Y alone,
     // without changing the buttons; with none that way, left and right go
-    // on the side arrow
+    // on the side arrow (only when L and R hold items: otherwise they change page)
     int n = dx || dy ? ItemStep(cur, dx, dy) : -1;
     if (n >= 0) {
       g_icur = n;
       sound_effect_2 = 32;
-    } else if (dx) {
+    } else if (dx && Hud_ItemOnLR()) {
       g_arrow = dx;
       sound_effect_2 = 32;
     }
@@ -1127,7 +1098,7 @@ bool HdInv_HandleInput(void) {
       hud_cur_item = Hud_MenuItemAt(best);
       timer_for_flashing_circle = 16;
       sound_effect_2 = 32;
-    } else if (dx) {
+    } else if (dx && Hud_ItemOnLR()) {
       g_arrow = dx;
       sound_effect_2 = 32;
     }
@@ -1139,7 +1110,7 @@ bool HdInv_HandleInput(void) {
     if (n >= 0) {
       g_qfrom = g_qcur, g_qcur = n;
       sound_effect_2 = 32;
-    } else if (dx) {
+    } else if (dx && Hud_ItemOnLR()) {
       g_arrow = dx;
       sound_effect_2 = 32;
     }

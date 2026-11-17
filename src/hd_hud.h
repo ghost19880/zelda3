@@ -14,6 +14,13 @@ void HdHud_BeforeRender(Ppu *ppu);
 void HdHud_Draw(uint8 *pixels, int pitch, int width, int height, int scale);
 // Chiamata dai personaggi che parlano quando Link e' nella posizione giusta
 void HdHud_CanTalk(void);
+// Colours of the SNES buttons everywhere they are shown (modern HUD, the
+// buttons in the modern text, the item menu badges): those of the Super
+// Famicom / European controller (Y green, X blue, A red, B yellow), or of the
+// North American one with English (US), French (CA) and Redux (Y and X light
+// lavender, A and B purple), see HdHud_UsController. ch: 'A', 'B', 'X' or 'Y'
+bool HdHud_UsController(void);
+uint32 HdHud_ButtonColor(char ch);
 
 // Testo moderno dei dialoghi (opzione ModernText). Dal gioco: messaggio
 // nuovo o finito (la comparsa delle lettere riparte da capo)

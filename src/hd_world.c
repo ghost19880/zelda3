@@ -38,6 +38,7 @@
 #include "hd_menu.h"
 #include "hd_water.h"
 #include "player.h"
+#include "player_oam.h"
 
 uint8 Overworld_AreaHead(int square);
 extern int g_cam_dx, g_cam_dy;          // vista rispetto alla telecamera del gioco (zelda_rtl.c)
@@ -1569,7 +1570,7 @@ static void CaptureEnemies(uint8 *pixels, int pitch, int width, int height) {
   // +1 come per il fondale: la riga 0 dello schermo e' la riga 1 della PPU
   int cam_x = BG2HOFS_copy2 + ppu->objBiasX - ext, cam_y = BG2VOFS_copy2 + ppu->objBiasY + 1;
   // Link colpito salta: il suo disegno sale di link_z_coord
-  int lx = link_x_coord, ly = link_y_coord, lz = (int16)link_z_coord > 0 ? (int16)link_z_coord : 0;
+  int lx = link_x_coord, ly = link_y_coord, lz = LinkOam_DrawnHeight();
   for (int k = 0; k < 16; k++) {
     if (!IsAreaEnemy(k) || IsSubmerged(k))
       continue;

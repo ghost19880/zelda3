@@ -367,7 +367,8 @@ static void CollectLights(const uint8 *pixels, int pitch, int height, int mod, b
   // (misc.c): l'alone pulsa con lo stesso ritmo
   float tf = t * 0.5f;
 
-  if (mod == 7) {
+  // lights of the room's tiles: one rule with the warp tiles (hd_fx.h)
+  if (mod == 7 && HdFx_PlaceLightsShow()) {
     // Torce accese della stanza
     int room = HdFx_LoadedRoom();
     // origine della stanza caricata: torce e decorazioni sono sue (nei
@@ -1085,7 +1086,7 @@ void HdLight_Apply(uint8 *pixels, int pitch, int width, int height, int bias_x, 
   CollectLights(pixels, pitch, height, mod, dark, width, torch_mask, ext, cam_x, cam_y, t);
   CollectSpriteLights(dark, ext, cam_x, cam_y, t);
   CollectGarnishLights(dark, ext, cam_x, cam_y, t);
-  if (mod == 7)
+  if (mod == 7 && HdFx_PlaceLightsShow())
     CollectLavaLights(pixels, pitch, width, height, dark, ext, cam_x, cam_y, t);
   if (!g_config.dynamic_light) {
     g_ambient = 1.0f;

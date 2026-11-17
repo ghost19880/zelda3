@@ -391,6 +391,23 @@ static void DrawSmallText(Canvas *cv, int x, int y, const char *s, uint32 color)
 
 #include "hd_hud_buttons.h"
 
+// The controller sold where the language of the game was sold: the purple
+// one of North America for English (US, also when no language is set: the
+// game's own English), French (CA) and Redux (made from the US version); the
+// coloured one of the Super Famicom, Europe and Brazil for the others
+bool HdHud_UsController(void) {
+  const char *l = g_config.language;
+  return !l || !*l || StringEqualsNoCase(l, "us") || StringEqualsNoCase(l, "fr-c") ||
+         StringEqualsNoCase(l, "redux");
+}
+
+// (the same values as COLORS and COLORS_US in tasti.js)
+uint32 HdHud_ButtonColor(char ch) {
+  if (HdHud_UsController())
+    return ch == 'X' || ch == 'Y' ? 0xc4c2f0 : 0x5a44c0;
+  return ch == 'A' ? 0xff4545 : ch == 'B' ? 0xfae037 : ch == 'X' ? 0x2a6ad8 : 0x46bf40;
+}
+
 // Un'immagine ARGB di hd_hud_buttons.h (tasti o dorsali)
 static void DrawImage(Canvas *cv, int x, int y, const uint32 *img, int w, int h) {
   for (int r = 0; r < h; r++)
@@ -777,23 +794,27 @@ void HdHud_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
     DrawButtonItem(&cv, rx + HD_SHOULDER_R_ITEM_X, sy + HD_SHOULDER_ITEM_Y, hud_cur_item_r);
     gy = sy + 1 + HD_SHOULDER_H + 2;
   }
+  // buttons of the American controller with English (US) (HdHud_ButtonColor)
+  bool us = HdHud_UsController();
   if (show_x) {
     int gx = W - bedge - HD_BUTTONS4_W;
-    DrawImage(&cv, gx, gy, kHdButtons4, HD_BUTTONS4_W, HD_BUTTONS4_H);
-    DrawButtonLetter(&cv, gx, gy, kHdButtons4, HD_BUTTONS4_W, HD_BUTTON4_X_X, HD_BUTTON4_X_Y, 'X');
-    DrawButtonLetter(&cv, gx, gy, kHdButtons4, HD_BUTTONS4_W, HD_BUTTON4_Y_X, HD_BUTTON4_Y_Y, 'Y');
-    DrawButtonLetter(&cv, gx, gy, kHdButtons4, HD_BUTTONS4_W, HD_BUTTON4_A_X, HD_BUTTON4_A_Y, 'A');
-    DrawButtonLetter(&cv, gx, gy, kHdButtons4, HD_BUTTONS4_W, HD_BUTTON4_B_X, HD_BUTTON4_B_Y, 'B');
+    const uint32 *img = us ? kHdButtons4Us : kHdButtons4;
+    DrawImage(&cv, gx, gy, img, HD_BUTTONS4_W, HD_BUTTONS4_H);
+    DrawButtonLetter(&cv, gx, gy, img, HD_BUTTONS4_W, HD_BUTTON4_X_X, HD_BUTTON4_X_Y, 'X');
+    DrawButtonLetter(&cv, gx, gy, img, HD_BUTTONS4_W, HD_BUTTON4_Y_X, HD_BUTTON4_Y_Y, 'Y');
+    DrawButtonLetter(&cv, gx, gy, img, HD_BUTTONS4_W, HD_BUTTON4_A_X, HD_BUTTON4_A_Y, 'A');
+    DrawButtonLetter(&cv, gx, gy, img, HD_BUTTONS4_W, HD_BUTTON4_B_X, HD_BUTTON4_B_Y, 'B');
     yx = gx + HD_BUTTON4_Y_X, yy = gy + HD_BUTTON4_Y_Y;
     ax = gx + HD_BUTTON4_A_X, ay = gy + HD_BUTTON4_A_Y;
     bx = gx + HD_BUTTON4_B_X, by = gy + HD_BUTTON4_B_Y;
     DrawButtonItem(&cv, gx + HD_BUTTON4_X_X, gy + HD_BUTTON4_X_Y, hud_cur_item_x);
   } else {
     int gx = W - bedge - HD_BUTTONS_W;
-    DrawImage(&cv, gx, gy, kHdButtons, HD_BUTTONS_W, HD_BUTTONS_H);
-    DrawButtonLetter(&cv, gx, gy, kHdButtons, HD_BUTTONS_W, HD_BUTTON_Y_X, HD_BUTTON_Y_Y, 'Y');
-    DrawButtonLetter(&cv, gx, gy, kHdButtons, HD_BUTTONS_W, HD_BUTTON_A_X, HD_BUTTON_A_Y, 'A');
-    DrawButtonLetter(&cv, gx, gy, kHdButtons, HD_BUTTONS_W, HD_BUTTON_B_X, HD_BUTTON_B_Y, 'B');
+    const uint32 *img = us ? kHdButtonsUs : kHdButtons;
+    DrawImage(&cv, gx, gy, img, HD_BUTTONS_W, HD_BUTTONS_H);
+    DrawButtonLetter(&cv, gx, gy, img, HD_BUTTONS_W, HD_BUTTON_Y_X, HD_BUTTON_Y_Y, 'Y');
+    DrawButtonLetter(&cv, gx, gy, img, HD_BUTTONS_W, HD_BUTTON_A_X, HD_BUTTON_A_Y, 'A');
+    DrawButtonLetter(&cv, gx, gy, img, HD_BUTTONS_W, HD_BUTTON_B_X, HD_BUTTON_B_Y, 'B');
     yx = gx + HD_BUTTON_Y_X, yy = gy + HD_BUTTON_Y_Y;
     ax = gx + HD_BUTTON_A_X, ay = gy + HD_BUTTON_A_Y;
     bx = gx + HD_BUTTON_B_X, by = gy + HD_BUTTON_B_Y;
@@ -1162,9 +1183,8 @@ static void DrawModernLine(Canvas *cv, int x, int y, int line, int clip0, int cl
         continue;
       }
       const uint16 *g = kModernTextFont[c];
-      // tasti A B X Y: colori SNES come i tasti dell'HUD (tasti.js)
-      static const uint32 kButtonColor[4] = { 0xff4545, 0xfae037, 0x2a6ad8, 0x46bf40 };
-      uint32 ink = c >= 91 && c <= 94 ? kButtonColor[c - 91] : 0;
+      // tasti A B X Y: colori SNES come i tasti dell'HUD (HdHud_ButtonColor)
+      uint32 ink = c >= 91 && c <= 94 ? HdHud_ButtonColor("ABXY"[c - 91]) : 0;
       for (int r = 0; r < kModernTextRows; r++) {
         int yy = y + r + (pass == 0);
         if (yy < clip0 || yy >= clip1)

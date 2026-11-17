@@ -19,6 +19,7 @@
 #include "sprite.h"
 #include "assets.h"
 #include "load_gfx.h"
+#include "player_oam.h"
 
 const uint16 *Dungeon_GetObjectTiles(int subtype, int idx);
 
@@ -1231,6 +1232,21 @@ bool HdFx_DungWarpAt(int wx, int wy) {
   return HdWater_DungAttr(pos, wx, wy) == 0x4b || HdWater_DungAttr(pos + 0x1000, wx, wy) == 0x4b;
 }
 
+// Warp tile at cell (col, row) of the loaded room at (ox, oy). In the
+// passages the game rebuilds the attribute table a piece per frame and for a
+// while it still holds the room before: then the tile of the loaded room must
+// be a warp tile too (attributes_for_tile, as Dungeon_LoadBasicAttribute_full),
+// or a warp of the room before would glow in the new one. The tiles alone are
+// not enough: the warp graphic is an animated character (0x1cf) also used by
+// other tiles of the room
+static bool DungWarpCell(int ox, int oy, int col, int row) {
+  if (!HdFx_DungWarpAt(ox + col * 8, oy + row * 8))
+    return false;
+  int i = row * 64 + col;
+  return !HdFx_DungeonPassing() ||
+         attributes_for_tile[dung_bg2[i] & 0x3ff] == 0x4b || attributes_for_tile[dung_bg1[i] & 0x3ff] == 0x4b;
+}
+
 // Dungeon warp tiles near the screen: top-left cell of each block
 static void FindDungeonPortals(int cam_x, int cam_y, int ext, int width, int height) {
   int room = HdFx_LoadedRoom();
@@ -1241,9 +1257,9 @@ static void FindDungeonPortals(int cam_x, int cam_y, int ext, int width, int hei
       continue;
     for (int col = 0; col < 64 && g_num_portals < kMaxPortals; col++) {
       int wx = ox + col * 8;
-      if (wx < cam_x - ext - 16 || wx > cam_x - ext + width + 16 || !HdFx_DungWarpAt(wx, wy))
+      if (wx < cam_x - ext - 16 || wx > cam_x - ext + width + 16 || !DungWarpCell(ox, oy, col, row))
         continue;
-      if ((col > 0 && HdFx_DungWarpAt(wx - 8, wy)) || (row > 0 && HdFx_DungWarpAt(wx, wy - 8)))
+      if ((col > 0 && DungWarpCell(ox, oy, col - 1, row)) || (row > 0 && DungWarpCell(ox, oy, col, row - 1)))
         continue;
       g_portal_x[g_num_portals] = wx + 8, g_portal_y[g_num_portals] = wy + 8;
       g_num_portals++;
@@ -1277,11 +1293,16 @@ static void FindPortals(int cam_x, int cam_y, int ext, int width, int height) {
   }
 }
 
+// (hd_fx.h) The ending scenes (HdFx_EndingScene) always run with a submodule
+// and show the lights. Dungeon: in every submodule (it waited for submodule
+// 0, so falling into a room its warp tile lit up only when Link landed)
+bool HdFx_PlaceLightsShow(void) {
+  return HdFx_EndingScene() || HdFx_SceneModule() == 7 || submodule_index == 0;
+}
+
 // Once per game frame: portals on screen and their sparks
-// Area changes and warps (submodule != 0) have no portal glow; the ending
-// scenes (HdFx_EndingScene) always run with a submodule and show it
 static bool PortalsPaused(void) {
-  return submodule_index && !HdFx_EndingScene();
+  return !HdFx_PlaceLightsShow();
 }
 
 // find: look for the portals on screen (first of the steps of one draw)
@@ -2961,7 +2982,7 @@ void HdFx_Fog(uint8 *pixels, int pitch, int width, int height, int bias_x, int b
     g_fog_t += fog_steps;
   float t = (float)g_fog_t;
   // centro di Link sullo schermo
-  float lx = link_x_coord + 8 - cam_x, ly = link_y_coord + 12 - (int16)link_z_coord - cam_y;
+  float lx = link_x_coord + 8 - cam_x, ly = link_y_coord + 12 - LinkOam_DrawnHeight() - cam_y;
   // without the HD fog the forest seen from outside gets the game's main
   // fog color only (flat, like most of its layer)
   bool clouds = g_config.fx_fog;
@@ -3719,7 +3740,9 @@ bool HdFx_ShadowMarks(Ppu *ppu, int height, const uint8 *owner, const uint8 *lin
   int mod;
   if (!g_config.fx_sprite_shadows || !HdFx_InGameplay(&mod) || ppu->mode == 7)
     return false;
-  bool link_on_ground = (int16)link_z_coord <= 0;
+  // the game leaves link_z_coord at 0x00ff when it loads a place (Link on
+  // the ground): read as 255 pixels up, Link had no shadow until he moved
+  bool link_on_ground = LinkOam_DrawnHeight() == 0;
   // Per ogni nemico: dov'e' la sua ombra del gioco e dove finisce il corpo.
   // Un nemico che cammina e' a terra se non e' in aria (sprite_z) e, quando
   // ha l'ombra del gioco, se questa tocca i piedi: in volo fra corpo e ombra

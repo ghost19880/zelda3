@@ -155,6 +155,12 @@ bool HdFx_DungWarpAt(int wx, int wy);
 int HdFx_LoadedRoom(void);
 // Scritta a fine Dungeon_LoadRoom (dungeon.c); -1 = non si sa
 extern int g_hd_loaded_room;
+// One rule for every dynamic light that belongs to the tiles of the place
+// (torches, braziers, lava, warp tiles): on as soon as the place shows. In a
+// dungeon always (they read the loaded room, HdFx_LoadedRoom: right also
+// while falling into a room, on stairs and between rooms); outdoors not while
+// an area change or a warp replaces the map
+bool HdFx_PlaceLightsShow(void);
 // Scorrimento verso un'altra stanza (7/2) o l'altra meta' della stanza (7/1)
 bool HdFx_RoomScroll(void);
 // Si vede il gioco (HdFx_SceneModule 7, 9 o 11): unico controllo per acqua,

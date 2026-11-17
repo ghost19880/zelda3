@@ -20,6 +20,7 @@
 #include "hd_water.h"
 #include "hd_pit.h"
 #include "hd_hud.h"
+#include "hud.h"
 #include "hd_inv.h"
 #include "hd_art.h"
 #include "hud_it.h"
@@ -1727,25 +1728,16 @@ bool HdMenu_FreezeEnemies(void) {
 // premuta la freccia si ferma appena dentro (l'input si ignora anche mentre lo
 // schermo si schiarisce) e vede la scritta: quella freccia conta gia' come primo
 // tasto, quindi lasciata e ripremuta toglie la scritta e muove subito Link.
-// Il tasto della mappa intanto non conta: non apre la mappa e non toglie
-// la scritta; la corsa (A) e tutti gli altri si'.
-// Tasto della mappa (bit di kKbdRemap in main.c): X, oppure Select con un
-// oggetto su X (DidPressButtonForMap in messaging.c)
-static int MapButtonMask(void) {
-  return hud_cur_item_x ? 1 << 2 : 1 << 9;
-}
-// su, giu', sinistra, destra, A (corsa) e Y (oggetto), X con un oggetto su X
-static int PassThroughMask(void) {
-  return 0xf0 | 1 << 8 | 1 << 1 | (hud_cur_item_x ? 1 << 9 : 0);
-}
+// Every button, Start and Select included, works this way (the map does not
+// open at a dungeon entrance anyway); L and R only when they do something
+// ("Switch items with L and R" or "L and R buttons for items")
 static bool g_dungeon_name_swallow;
 static int g_dungeon_name_prev_inputs;
 
 int HdMenu_FilterInput(int inputs) {
-  int all = inputs;
-  // con la scritta (o mentre la si aspetta) il tasto della mappa non esiste
-  if (g_dungeon_name && main_module_index == 7)
-    inputs &= ~MapButtonMask();
+  if (g_dungeon_name && main_module_index == 7 &&
+      !(enhanced_features0 & kFeatures0_SwitchLR) && !Hud_ItemOnLR())
+    inputs &= ~(1 << 10 | 1 << 11);  // L, R (kKbdRemap in main.c)
   int pressed = inputs & ~g_dungeon_name_prev_inputs;
   g_dungeon_name_prev_inputs = inputs;
   if (g_dungeon_name_swallow) {
@@ -1756,7 +1748,7 @@ int HdMenu_FilterInput(int inputs) {
   // sottomodulo 15: lo schermo si schiarisce entrando (la freccia tenuta
   // spostava Link proprio nell'ultimo fotogramma)
   if (!g_dungeon_name || main_module_index != 7 || (submodule_index != 0 && submodule_index != 15))
-    return all;
+    return inputs;
   bool visible = g_dungeon_name_armed && submodule_index == 0 && (INIDISP_copy & 0x8f) == 0x0f;
   if (!visible || (inputs & ~pressed)) {
     // si aspetta la scritta, o si tiene un tasto premuto da prima
@@ -1771,11 +1763,6 @@ int HdMenu_FilterInput(int inputs) {
     g_dungeon_name_held = false;
     return inputs;
   }
-  // come su GBA una direzione o la corsa tolgono la scritta e Link si muove
-  // subito; l'oggetto pure (vicino alla porta il gioco non lo usa); la spada
-  // e gli altri tasti la tolgono soltanto, la mappa e' gia' esclusa sopra
-  if (pressed & PassThroughMask())
-    return inputs & PassThroughMask();
   g_dungeon_name_swallow = true;
   return 0;
 }
