@@ -198,6 +198,11 @@ void HdFx_AsBgBeforeRender(Ppu *ppu);
 void HdFx_IrisBeforeRender(Ppu *ppu);
 void HdFx_IrisAfterRender(Ppu *ppu);
 void HdFx_SoftIris(uint8 *pixels, int pitch, int width, int height);
+// Transition circle (soft iris, desert prayer ellipse) drawn this frame
+bool HdFx_IrisCovering(void);
+// How much of pixel x, y of the picture (width x height, wide-screen bands
+// included) the circle lets through: 1 all, 0 black
+float HdFx_IrisCover(int x, int y, int width, int height);
 // Dissolvenze delle palette: la PPU disegna il fondale con i colori veri, le
 // aggiunte HD lavorano su quelli e alla fine si scurisce tutto come il gioco
 void HdFx_FadeBeforeRender(Ppu *ppu);

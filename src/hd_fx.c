@@ -1871,6 +1871,11 @@ int HdFx_SceneModule(void) {
   // Pyramid where the bat crashes (3-4 load it with the screen off)
   if (m == 24)
     return overworld_map_state <= 2 ? 7 : 9;
+  // Triforce room (25): up to state 2 the room Link leaves is still on the
+  // screen with the HUD, breaking up in the mosaic and fading out; state 2
+  // then turns the screen off and loads the Triforce room (no HUD there)
+  if (m == 25 && subsubmodule_index <= 2)
+    return player_is_indoors ? 7 : 9;
   // morte di Link (18): finche' si vede il mondo e' la scena di prima
   if (HdFx_DeathShowsWorld())
     return saved_module_for_menu;
@@ -1887,7 +1892,7 @@ int HdFx_SceneModule(void) {
 // shown (indoors): the land under the tower turned flat blue
 bool HdFx_DungeonRoomRuns(void) {
   int m = main_module_index;
-  return m == 7 || ((m == 24 || m == 21) && HdFx_SceneModule() == 7);
+  return m == 7 || ((m == 24 || m == 21 || m == 25) && HdFx_SceneModule() == 7);
 }
 
 // Morte di Link (modulo 18): il mondo resta sullo schermo mentre Link cade e
@@ -3619,12 +3624,11 @@ static void PrayerIris(uint8 *pixels, int pitch, int width, int height) {
   }
 }
 
-void HdFx_SoftIris(uint8 *pixels, int pitch, int width, int height) {
-  if (g_prayer_override)
-    PrayerIris(pixels, pitch, width, height);
-  if (!g_iris_override)
-    return;
-  const float kSoft = 8.0f;
+enum { kIrisSoft = 8 };
+
+// Centre and radius of the soft circle on a picture width x height
+static void IrisCircle(int width, int height, float *pcx, float *pcy, float *pr) {
+  const float kSoft = kIrisSoft;
   int ext = (width - 256) / 2;
   // con la vista spostata (mondo continuo) Link, e con lui il centro del
   // cerchio, si disegna spostato come gli sprite
@@ -3636,7 +3640,45 @@ void HdFx_SoftIris(uint8 *pixels, int pitch, int width, int height) {
     if (dx * dx + dy * dy > far2)
       far2 = dx * dx + dy * dy;
   }
-  float r = g_hd_iris_r * (1.0f / 126) * (sqrtf(far2) + kSoft);
+  *pcx = cx, *pcy = cy;
+  *pr = g_hd_iris_r * (1.0f / 126) * (sqrtf(far2) + kSoft);
+}
+
+bool HdFx_IrisCovering(void) {
+  return g_iris_override || g_prayer_override;
+}
+
+// The original HUD is part of the picture, so the circle covers it too
+float HdFx_IrisCover(int x, int y, int width, int height) {
+  Ppu *ppu = g_zenv.ppu;
+  if (g_prayer_override) {
+    int ext = (width - 256) / 2, gy = y + ppu->objBiasY, l = 1, r = 0;
+    if (gy >= 0 && gy < 240)
+      l = g_prayer_iris_l[gy], r = g_prayer_iris_r[gy];
+    l += ext - ppu->objBiasX, r += ext - ppu->objBiasX;
+    if (x < l || x > r)
+      return 0;
+  }
+  if (!g_iris_override)
+    return 1;
+  float cx, cy, r;
+  IrisCircle(width, height, &cx, &cy, &r);
+  float dx = x - cx, dy = y - cy, k = (r - sqrtf(dx * dx + dy * dy)) / kIrisSoft;
+  if (k >= 1)
+    return 1;
+  if (k <= 0)
+    return 0;
+  return k * k * (3 - 2 * k);
+}
+
+void HdFx_SoftIris(uint8 *pixels, int pitch, int width, int height) {
+  if (g_prayer_override)
+    PrayerIris(pixels, pitch, width, height);
+  if (!g_iris_override)
+    return;
+  const float kSoft = kIrisSoft;
+  float cx, cy, r;
+  IrisCircle(width, height, &cx, &cy, &r);
   for (int y = 0; y < height; y++) {
     uint32 *row = (uint32 *)(pixels + y * pitch);
     float dy = y - cy;

@@ -625,13 +625,19 @@ static inline bool PpuMaxDigit_Tile(uint16 tile) {
   return (tile & 0x1c00) == 0x1400 && (uint16)((tile & 0x3ff) - 0x90) < 10;
 }
 
-static void PpuDrawHudSplit(Ppu *ppu, bool sub, int ty, PpuZbufType zhi, PpuZbufType zlo) {
+// mosaic: the game's mosaic of BG3 (Lost Woods passage) breaks up the HUD
+// where it is shown, each square takes the pixel of its first column (ty is
+// already the first row of the square, PpuDrawBackground_2bpp_mosaic).
+// line: line of the picture; the game's windows hide it as they hide BG3
+// (Ppu.bg3Shown, the bands take the nearest column)
+static void PpuDrawHudSplit(Ppu *ppu, bool sub, int ty, PpuZbufType zhi, PpuZbufType zlo, bool mosaic, int line) {
   int ext = ppu->hudSplitExt;
   BgLayer *bg = &ppu->bgLayer[2];
   PpuZbufType *dstz = ppu->bgBuffers[sub].data + kPpuExtraLeftRight;
   for (int x = -ext; x < 256 + ext; x++) {
-    int sx, sy;
-    if (!PpuHudSplitSrc(ppu, x, ty, &sx, &sy))
+    int sx, sy, ox = mosaic ? x - MosaicPhase(ppu, x) : x;
+    if (!PpuHudSplitSrc(ppu, ox < -ext ? -ext : ox, ty, &sx, &sy) ||
+        (!sub && !PpuBg3Shown(ppu, x, line - 1)))
       continue;
     uint u = sx + bg->hScroll;
     int sc = bg->tilemapAdr + ((sy >> 3) & 0x1f) * 32 + ((u >> 3) & 0x1f);
@@ -686,6 +692,7 @@ static void PpuDrawBackground_2bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
   PpuWindows win;
   IS_SCREEN_WINDOWED(ppu, sub, layer) ? PpuWindows_Calc(&win, ppu, layer) : PpuWindows_Clear(&win, ppu, layer);
   BgLayer *bglayer = &ppu->bgLayer[layer];
+  int line = y;
   y += bglayer->vScroll + BG_BIAS_Y(ppu, layer);
   int sc_offs = bglayer->tilemapAdr + (((y >> 3) & 0x1f) << 5);
   if ((y & 0x100) && bglayer->tilemapHigher)
@@ -699,7 +706,7 @@ static void PpuDrawBackground_2bpp(Ppu *ppu, uint y, bool sub, uint layer, PpuZb
   int ty = y & (bglayer->tilemapHigher ? 0x1ff : 0xff);
   if (layer == 2 && (ppu->hudSplitExt || ppu->hudBoxRow || ppu->hudGba) &&
       ty >= (ppu->hudGba ? kGbaHudTop : 16) && ty < kHudSplitBottom) {
-    PpuDrawHudSplit(ppu, sub, ty, zhi, zlo);
+    PpuDrawHudSplit(ppu, sub, ty, zhi, zlo, false, line);
     return;
   }
 
@@ -865,7 +872,16 @@ static void PpuDrawBackground_2bpp_mosaic(Ppu *ppu, int y, bool sub, uint layer,
   PpuWindows win;
   IS_SCREEN_WINDOWED(ppu, sub, layer) ? PpuWindows_Calc(&win, ppu, layer) : PpuWindows_Clear(&win, ppu, layer);
   BgLayer *bglayer = &ppu->bgLayer[layer];
+  int line = y;
   y = ppu->mosaicModulo[y] + bglayer->vScroll + BG_BIAS_Y(ppu, layer);
+  // the split HUD keeps its place on the wide screen also with the mosaic
+  // (before, it came back to the middle for the whole passage)
+  int ty = y & (bglayer->tilemapHigher ? 0x1ff : 0xff);
+  if (layer == 2 && (ppu->hudSplitExt || ppu->hudBoxRow || ppu->hudGba) &&
+      ty >= (ppu->hudGba ? kGbaHudTop : 16) && ty < kHudSplitBottom) {
+    PpuDrawHudSplit(ppu, sub, ty, zhi, zlo, true, line);
+    return;
+  }
   int sc_offs = bglayer->tilemapAdr + (((y >> 3) & 0x1f) << 5);
   if ((y & 0x100) && bglayer->tilemapHigher)
     sc_offs += bglayer->tilemapWider ? 0x800 : 0x400;
@@ -1261,7 +1277,35 @@ static inline void PpuObjMathOut(Ppu *ppu, uint32 at, uint32 sub, uint32 r, uint
       (uint32)ppu->brightnessMult[r] << 16 | (uint32)ppu->brightnessMult[g] << 8 | ppu->brightnessMult[b];
 }
 
+// Where BG3 shows on this line of the main screen (Ppu.bg3Shown): its
+// window (TMW) and the colour window that clips the picture to black
+static void PpuNoteBg3Shown(Ppu *ppu, uint y) {
+  if (y - 1 >= 240)
+    return;
+  uint32 *m = ppu->bg3Shown[y - 1];
+  memset(m, 0, sizeof(ppu->bg3Shown[0]));
+  if (ppu->forcedBlank || ppu->mode == 7 || !IS_SCREEN_ENABLED(ppu, false, 2))
+    return;
+  PpuWindows win, cwin;
+  IS_SCREEN_WINDOWED(ppu, false, 2) ? PpuWindows_Calc(&win, ppu, 2) : PpuWindows_Clear(&win, ppu, 2);
+  PpuWindows_Calc(&cwin, ppu, 5);
+  static const uint8 kCwBitsMod[8] = {
+    0x00, 0xff, 0xff, 0x00,
+    0xff, 0x00, 0xff, 0x00,
+  };
+  uint32 keep = (cwin.bits & kCwBitsMod[ppu->clipMode]) ^ kCwBitsMod[ppu->clipMode + 4];
+  for (int x = 0, wi = 0, ci = 0; x < 256; x++) {
+    while (wi + 1 < win.nr && x >= win.edges[wi + 1])
+      wi++;
+    while (ci + 1 < cwin.nr && x >= cwin.edges[ci + 1])
+      ci++;
+    if (!(win.bits >> wi & 1) && (keep >> ci & 1))
+      m[x >> 5] |= 1u << (x & 31);
+  }
+}
+
 static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
+  PpuNoteBg3Shown(ppu, y);
   if (ppu->forcedBlank) {
     uint8 *dst = &ppu->renderBuffer[(y - 1) * ppu->renderPitch];
     size_t n = sizeof(uint32) * (256 + ppu->extraLeftRight * 2);

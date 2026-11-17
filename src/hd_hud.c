@@ -7,6 +7,7 @@
 // (cuori, rupie, chiavi, cifre, icone degli oggetti) in una nuova disposizione.
 // I pixel sono marcati come HUD (alpha 2): lo shader non li tocca.
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 #include "hd_hud.h"
 #include "hd_world.h"
@@ -680,7 +681,92 @@ static void DrawBand(Canvas *cv, int cx, int y, const char *t, int h2) {
 #undef BAND_S
 }
 
+static void HudDraw(uint8 *pixels, int pitch, int width, int height, int scale);
+
+// The modern HUD does in every passage what the original one does, which is
+// part of the picture (BG3):
+// - the game's mosaic on BG3 (Lost Woods passage) breaks it up with the same
+//   squares as the PPU (MosaicPhase in ppu.c, HdFx_Mosaic): each pixel of a
+//   square takes the HUD pixel of the square's first one, or the picture as
+//   it was under the HUD when there the HUD has nothing;
+// - the game's windows on BG3 (Ppu.bg3Shown: transition circle, spotlight...)
+//   hide it;
+// - the soft circle and the prayer ellipse (HdFx_IrisCover) cover it.
+// Brightness and forced blank: HudDraw (g_hud_bri).
+static uint32 *g_mosaic_under;
+static size_t g_mosaic_under_size;
+
+static bool Bg3PartlyHidden(Ppu *ppu) {
+  for (int y = 0; y < 240; y++)
+    for (int i = 0; i < 8; i++)
+      if (ppu->bg3Shown[y][i] != 0xffffffffu)
+        return true;
+  return false;
+}
+
 void HdHud_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
+  Ppu *ppu = g_zenv.ppu;
+  int m = ppu->mosaicSize;
+  bool mosaic = m > 1 && (ppu->mosaicEnabled & 4);
+  bool iris = HdFx_IrisCovering();
+  bool win = ppu->mode != 7 && !ppu->forcedBlank && Bg3PartlyHidden(ppu);
+  if (!ModernHudOn() || (!mosaic && !iris && !win)) {
+    HudDraw(pixels, pitch, width, height, scale);
+    return;
+  }
+  size_t need = (size_t)width * height;
+  if (g_mosaic_under_size < need) {
+    uint32 *p = (uint32 *)realloc(g_mosaic_under, need * sizeof(uint32));
+    if (!p) {
+      HudDraw(pixels, pitch, width, height, scale);
+      return;
+    }
+    g_mosaic_under = p, g_mosaic_under_size = need;
+  }
+  for (int y = 0; y < height; y++)
+    memcpy(g_mosaic_under + (size_t)y * width, pixels + y * pitch, width * sizeof(uint32));
+  HudDraw(pixels, pitch, width, height, scale);
+  int W = width / scale, H = height / scale, ext = (W - 256) / 2;
+  if (mosaic) {
+  for (int y = 0; y < height; y++) {
+    // PPU line y + 1 takes line (y + 1) - (y + 1) % m
+    int gy = y / scale, oy = (gy + 1) - (gy + 1) % m - 1;
+    oy = (oy < 0 ? 0 : oy) * scale + y % scale;
+    uint32 *row = (uint32 *)(pixels + y * pitch);
+    const uint32 *orow = (const uint32 *)(pixels + oy * pitch);
+    const uint32 *under = g_mosaic_under + (size_t)y * width;
+    const uint32 *ounder = g_mosaic_under + (size_t)oy * width;
+    for (int x = 0; x < width; x++) {
+      int gx = x / scale, ox = gx - ((gx - ext) % m + m) % m;
+      ox = (ox < 0 ? 0 : ox) * scale + x % scale;
+      if (ox == x && oy == y)
+        continue;
+      // the first pixel of the square is already final (drawn before)
+      row[x] = orow[ox] != ounder[ox] ? orow[ox] : under[x];
+    }
+  }
+  }
+  if (!iris && !win)
+    return;
+  for (int y = 0; y < height; y++) {
+    uint32 *row = (uint32 *)(pixels + y * pitch);
+    const uint32 *under = g_mosaic_under + (size_t)y * width;
+    int gy = y / scale;
+    for (int x = 0; x < width; x++) {
+      if (row[x] == under[x])
+        continue;  // no HUD here
+      int gx = x / scale;
+      float k = win && !PpuBg3Shown(ppu, gx - ext, gy) ? 0.0f :
+                iris ? HdFx_IrisCover(gx, gy, W, H) : 1.0f;
+      if (k <= 0)
+        row[x] = under[x];
+      else if (k < 1)
+        row[x] = HdFx_ScaleRgb(row[x], k);
+    }
+  }
+}
+
+static void HudDraw(uint8 *pixels, int pitch, int width, int height, int scale) {
   // A new game starts with no magic: the bar shows from the first magic
   // (a jar or a refill) and then stays, also empty; back to the title or the
   // file select it waits again

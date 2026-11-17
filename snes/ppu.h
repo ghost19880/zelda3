@@ -94,6 +94,11 @@ struct Ppu {
   uint8_t hudGbaCountersW;
   // rows the GBA HUD pieces go down beyond the scroll of BG3 (START menu)
   uint8_t hudGbaDrop;
+  // BG3 (the layer of the original HUD) shown on each line of the main
+  // screen: bit x of the 256 central columns, 0 where the game's windows
+  // (transition circle, spotlight...) or its colour window hide it, all 0
+  // with the layer off. The modern HUD (hd_hud.c) hides itself there too
+  uint32_t bg3Shown[240][8];
   int16_t objY[128], objX[128];
   // Ombre morbide (hd_fx.c): per ogni voce OAM se fa ombra e, per ogni pixel
   // del fotogramma (objShadowStride per riga), se lo sprite disegnato li'
@@ -230,6 +235,18 @@ void PpuObjRows(Ppu *ppu, int height, int *y0, int *y1);
 uint8_t ppu_read(Ppu* ppu, uint8_t adr);
 void ppu_write(Ppu* ppu, uint8_t adr, uint8_t val);
 void ppu_saveload(Ppu *ppu, SaveLoadFunc *func, void *ctx);
+// BG3 shown at column x (screen picture, 0 = left edge of the 256 central
+// columns; the bands take the nearest column) of picture row y (the rows
+// below the original 224, extend_y, take row 223)
+static inline bool PpuBg3Shown(const Ppu *ppu, int x, int y) {
+  if (y < 0)
+    return true;
+  if (y > 223)
+    y = 223;
+  x = x < 0 ? 0 : x > 255 ? 255 : x;
+  return ppu->bg3Shown[y][x >> 5] >> (x & 31) & 1;
+}
+
 void PpuBeginDrawing(Ppu *ppu, uint8_t *buffer, size_t pitch, uint32_t render_flags);
 
 // Returns the current render scale, 1x = 256px, 2x=512px, 4x=1024px
