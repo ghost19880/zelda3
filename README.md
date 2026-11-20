@@ -1,3 +1,5 @@
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/J7W72B0EZ0)
+
 # Zelda3 HD
 
 A fork of [snesrev/zelda3](https://github.com/snesrev/zelda3) with a set of "HD" improvements inspired by *Link's Awakening* (Switch) and *Four Swords Adventures*, plus Italian support.
