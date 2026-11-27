@@ -52,10 +52,10 @@ Everything is optional and can be turned on or off from the new in-game options 
 - *Fewer flashes (VC)* matches the 3DS Virtual Console ROM (softer white flashes, dimmer title sword, steady flashing floors, slower Ether). *Fewer flashes (GBA)* follows the GBA version: steady grey Kholdstare when it splits, steady Mad Batter and Buzz Blob colours, one white flash on the title, slow lightning on the roof of Ganon's Tower (Agahnim's second room) and on the Dark World Death Mountain, rain lightning of the prologue like the GBA, slower blinking of the selected number on the flute map, the barrier of Ganon's Tower pulsing smoothly as on the GBA. With either of them improved rain and lightning is off.
 - Blurred game behind the inventory, dialogues and menus, soft shadows under characters and enemies, a soft circle transition, on-screen button hints in the inventory (once the menu has finished sliding) and on the maps, and an autosave icon.
 - **Four Swords Adventures look** (`shaders/foursword`): crisp pixels, a diagonal brush texture anchored to the world (not on water), soft drop shadows, glow on bright areas and cloud shadows drifting over sunny outdoor areas (one big and one small hand-drawn cloud shape, sized like the ones in Four Swords Adventures, moving at their speed). HUD and characters stay untouched, and so do the crystals, the pendants and the maiden's crystal scene.
+- 
+<img width="500" height="281" alt="1" src="https://github.com/user-attachments/assets/19eab9e1-434d-43e4-90c5-94d5687f567f" /><img width="500" height="281" alt="2" src="https://github.com/user-attachments/assets/21cb7b08-5f86-418b-8358-69e9ede154ad" />
+<img width="500" height="281" alt="3" src="https://github.com/user-attachments/assets/3ec82cdd-2d1d-4b87-9434-9c76fadb321a" /><img width="500" height="281" alt="4" src="https://github.com/user-attachments/assets/6c454737-e0ee-4412-bda1-60fc1925549a" />
 
-<img width="500" height="281" alt="3" src="https://github.com/user-attachments/assets/5ca23c38-fb94-439a-98fe-52fc64f99db5" />
-<img width="500" height="281" alt="4" src="https://github.com/user-attachments/assets/42f82c58-6f48-4f21-b400-a87536fc1a17" />
-<img width="500" height="281" alt="5" src="https://github.com/user-attachments/assets/fee65366-8e6a-4192-9418-14593d34f422" />
 
 **Language**
 - Italian: the dialogue font gains accented letters; the translation itself lives in a separate repository, [zelda3-italiano](https://github.com/ghost19880/zelda3-italiano), and is downloaded by the launcher.
