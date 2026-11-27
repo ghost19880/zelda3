@@ -12396,6 +12396,7 @@ void Sprite_0D_Buzzblob(int k) {  // 86d89a
   static const uint8 kBuzzBlob_ObjPrio[4] = {10, 2, 8, 2};
   if (sprite_delay_aux1[k])
     // Meno flash GBA (0x80e6afa): colore fisso invece del lampeggio
+    // (obj_prio 8: the GBA's grey, HdFx_GreyBeforeRender)
     sprite_obj_prio[k] = sprite_obj_prio[k] & 0xf1 | ((enhanced_features0 & kFeatures0_DimFlashesGba) ? 8 : kBuzzBlob_ObjPrio[sprite_delay_aux1[k] >> 1 & 3]);
   Sprite_Cukeman(k);
   BuzzBlob_Draw(k);
@@ -20616,34 +20617,9 @@ void GenerateIceball(int k) {  // 9e94dd
   }
 }
 
-// Kholdstare appena uscito dal guscio, prima di dividersi in tre: nell'originale
-// cambia palette a ogni fotogramma per 2 secondi.
-// Meno flash GBA: resta grigio fisso, come su GBA (per chi e' fotosensibile).
-// Il GBA usa una palette apposta (sprite 8) tutta 0x5ad6 con il contorno
-// (colore 5) 0x39ce; qui si carica nella palette sprite 3, libera nella stanza.
-// (la Virtual Console non lo cambia: con Meno flash VC resta l'originale)
-enum { kKholdstareGreyPal = 3 };
-
-static void Kholdstare_GreyPalette(int k) {
-  uint16 *pal = main_palette_buffer + 0x80 + kKholdstareGreyPal * 16;
-  bool bursting = sprite_ai_state[k] == 2 && sprite_delay_main[k] != 0;
-  if (bursting && (enhanced_features0 & kFeatures0_DimFlashesGba)) {
-    if (pal[5] != 0x39ce) {
-      for (int i = 1; i < 16; i++)
-        pal[i] = (i == 5) ? 0x39ce : 0x5ad6;
-      flag_update_cgram_in_nmi++;
-    }
-    sprite_obj_prio[k] = (sprite_obj_prio[k] & ~0xe) | ((sprite_oam_flags[k] ^ kKholdstareGreyPal << 1) & 0xe);
-  } else if (pal[5] == 0x39ce && pal[1] == 0x5ad6) {
-    memcpy(pal, aux_palette_buffer + 0x80 + kKholdstareGreyPal * 16, 16 * sizeof(uint16));
-    flag_update_cgram_in_nmi++;
-  }
-}
-
 void Sprite_A2_Kholdstare(int k) {  // 9e9518
   int j;
 
-  Kholdstare_GreyPalette(k);
   Kholdstare_Draw(k);
   if (Sprite_ReturnIfInactive(k))
     return;

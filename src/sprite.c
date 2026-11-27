@@ -1283,8 +1283,17 @@ void Sprite_TimersAndOam(int k) {  // 8683f2
           Sprite_MiniMoldorm_Recoil(k);
         }
       }
-      if (sprite_give_damage[k] < 251)
-        sprite_obj_prio[k] = sprite_hit_timer[k] * 2 & 0xe;
+      if (sprite_give_damage[k] < 251) {
+        // Fewer flashes (GBA, 0x80c2cb0): instead of going through the eight
+        // palettes the enemy turns grey (obj_prio 0xe, drawn with the grey
+        // palette: HdFx_GreyBeforeRender) while the timer is above 20
+        if (enhanced_features0 & kFeatures0_DimFlashesGba) {
+          if (timer >= 20)
+            sprite_obj_prio[k] = timer == 20 ? 0 : 0xe;
+        } else {
+          sprite_obj_prio[k] = sprite_hit_timer[k] * 2 & 0xe;
+        }
+      }
       sprite_hit_timer[k]--;
     } else {
       sprite_hit_timer[k] = 0;
@@ -3165,6 +3174,13 @@ void ForcePrizeDrop(int k, uint8 prize, uint8 slot) {  // 86f9bc
 }
 
 void PrepareEnemyDrop(int k, uint8 item) {  // 86f9d1
+  // Continuous world: the drop no longer holds the dead enemy's place in the
+  // area's table. Leaving the screen it freed that place, and the whole area
+  // being loaded at once the enemy came back home at once, before Link's
+  // eyes (on the SNES only when its home entered the screen again); now it
+  // stays defeated as an enemy that drops nothing
+  if (!player_is_indoors && HdWorld_Active())
+    sprite_N_word[k] = 0xffff;
   sprite_type[k] = item;
   if (item == 0xe5)
     SpritePrep_BigKey_load_graphics(k);

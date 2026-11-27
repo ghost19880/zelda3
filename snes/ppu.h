@@ -111,6 +111,14 @@ struct Ppu {
   // nemici congelati (palette 2), ogni colore v sostituito da iceRemap[v]
   uint8_t objIce[128];
   uint8_t iceRemap[16];
+  // Fewer flashes (GBA, hd_fx.c): OAM entries drawn in the flat grey of the
+  // GBA (1: palettes 0-3, 2: palettes 4-7, for the colour math). Their pixels
+  // take colour 0 of sprite palette 0/1 (4/5 with 2), which no layer shows and
+  // which holds the grey while the frame is drawn
+  uint8_t objGrey[128];
+  // Fewer flashes (GBA): pixels added to the x of each OAM entry (an enemy
+  // that is hit shakes, hd_fx.c)
+  uint8_t objShake[128];
   // Link sott'acqua al chiuso (hd_fx.c): le voci OAM con objUnderWater restano
   // sopra il fondale ma si mescolano a meta' con lo schermo secondario
   // (l'acqua), come su GBA; nel buffer i loro pixel hanno il bit 0x800

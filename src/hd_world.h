@@ -7,6 +7,9 @@
 
 // Attivo in questo frame (all'esterno, nel Mondo della Luce o delle Tenebre)
 bool HdWorld_Active(void);
+// Mirror and warp tiles: the area number changes as soon as they start, but
+// the screen shows the world left behind until the new one is drawn
+bool HdWorld_WarpShowsOldWorld(void);
 // Una volta per frame di gioco: posizione della telecamera "libera", cioe'
 // quella che il gioco avrebbe se non si fermasse ai bordi dell'area
 void HdWorld_UpdateCamera(int *cam_x, int *cam_y);

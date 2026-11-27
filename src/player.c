@@ -257,6 +257,7 @@ void Link_ControlHandler() {  // 87807f
   if (link_player_handler_state)
     Player_CheckHandleCapeStuff();
   kPlayerHandlers[link_player_handler_state]();
+  LinkRod_CancelInDoorway();
 }
 
 void LinkState_Default() {  // 878109
@@ -310,6 +311,8 @@ void HandleLink_From1D() {  // 878130
   }
 }
 
+static void LinkRod_WalkEnd(void);
+
 void PlayerHandler_00_Ground_3() {  // 8781a0
   g_ApplyLinksMovementToCamera_called = false;
 
@@ -338,6 +341,7 @@ void PlayerHandler_00_Ground_3() {  // 8781a0
     }
   }
 
+  LinkRod_WalkEnd();
   Link_HandleCape_passive_LiftCheck();
   if (link_incapacitated_timer) {
     link_moving_against_diag_tile = 0;
@@ -357,7 +361,8 @@ void PlayerHandler_00_Ground_3() {  // 8781a0
   if (link_unk_master_sword) {
     link_direction = 0;
   } else if (!link_is_transforming && (link_grabbing_wall & ~2) == 0 && (link_state_bits & 0x7f) == 0 &&
-             ((link_state_bits & 0x80) == 0 || (link_picking_throw_state & 1) == 0) && !link_item_in_hand && !link_position_mode &&
+             ((link_state_bits & 0x80) == 0 || (link_picking_throw_state & 1) == 0) &&
+             (!link_item_in_hand || Link_RodWalks()) && !link_position_mode &&
              (button_b_frames >= 9 || (button_mask_b_y & 0x20) != 0 || (button_mask_b_y & 0x80) == 0)) {
     // if_4
 
@@ -2539,6 +2544,50 @@ static bool Link_PayMagicQuietly(uint8 x) {
 enum { kRodPuffEvery = 4, kRodStreamPay = 32, kRodStreamSfx = 16 };
 static uint16 g_rod_stream;
 static bool g_rod_shot_waits;
+static bool g_rod_walk_speed;  // the stream gave Link the speed of the charged sword
+
+// FsaItems: during the stream Link walks with the rod held out, at the speed
+// and with the steps of the charged sword (player_oam.c draws the rod)
+bool Link_RodWalks(void) {
+  return g_config.fsa_items && (link_item_in_hand & 1) && player_handler_timer == 2 && g_rod_stream != 0 &&
+         Link_ItemButtonHeld(g_item_btn);
+}
+
+// Walking into a door, or anything that starts a passage (doors, entrances,
+// stairs, scrolling to the next room or area), puts the rod away at once: Link
+// comes out at rest, as without the rod (the game's passages only clear
+// button_mask_b_y and left him with the rod in hand). Also from LinkOam_Main,
+// which runs in the passages too, where Link_Main does not
+void LinkRod_CancelInDoorway(void) {
+  if (!g_config.fsa_items || !(link_item_in_hand & 1) || !g_rod_stream ||
+      !(is_standing_in_doorway || submodule_index != 0 || (main_module_index != 7 && main_module_index != 9) ||
+        !(button_mask_b_y & 0x40)))
+    return;
+  link_item_in_hand &= ~1;
+  button_mask_b_y &= ~0x40;
+  player_handler_timer = 0;
+  link_delay_timer_spin_attack = 0;
+  link_debug_value_2 = 0;
+  g_rod_stream = 0;
+  g_rod_shot_waits = false;
+  if (g_rod_walk_speed) {
+    g_rod_walk_speed = false;
+    if (link_speed_setting == 12)
+      link_speed_setting = 0;
+    link_cant_change_direction &= ~1;
+  }
+}
+
+// the stream over (or cut short: damage, falls), the sword's speed goes
+static void LinkRod_WalkEnd(void) {
+  if (!g_rod_walk_speed || Link_RodWalks())
+    return;
+  g_rod_walk_speed = false;
+  if (link_speed_setting == 12)
+    link_speed_setting = 0;
+  if (!(button_mask_b_y & 0x80))
+    link_cant_change_direction &= ~1;
+}
 
 static bool LinkRod_Stream(void) {
   if (!g_config.fsa_items || !Link_ItemButtonHeld(g_item_btn))
@@ -2602,6 +2651,9 @@ void LinkItem_Rod() {  // 879eef
     g_rod_shot_waits = false;
     if (LinkRod_Stream()) {
       link_delay_timer_spin_attack = 0;
+      link_speed_setting = 12;
+      link_cant_change_direction |= 1;
+      g_rod_walk_speed = true;
       return;
     }
   }
@@ -6640,7 +6692,7 @@ void Link_HandleMovingAnimation_StartWithDash() {  // 87e704
   } else if (submodule_index != kPlayerState_JumpOffLedgeDiag && (link_state_bits & 0x80) == 0) {
     if (bitmask_of_dragstate & 0x8d) {
       x = 12;
-    } else if (!draw_water_ripples_or_grass && !button_b_frames) {
+    } else if (!draw_water_ripples_or_grass && !button_b_frames && !Link_RodWalks()) {
       // else_6
       x = link_animation_steps;
       if (link_speed_setting == 6)

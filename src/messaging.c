@@ -385,10 +385,6 @@ void Module0E_0B_SaveMenu() {  // 80f9fa
       index_of_changable_dungeon_objs[1] = 0;
     } else {
       choice_in_multiselect_box = choice_in_multiselect_box_bak;
-      // Correzioni minori GBA: suono alla chiusura (GBA 0x74; qui quello
-      // della chiusura del menu degli oggetti)
-      if (enhanced_features0 & kFeatures0_GbaMinorFixes)
-        sound_effect_2 = 18;
     }
   }
 }
@@ -3601,12 +3597,6 @@ void RenderText_Draw_Choose3() {  // 8ecef7
   }
 }
 
-// Minor GBA fixes: the Continue / Save and quit menu opened with Select
-// (DisplaySelectMenu) closes with Select again, as Continue. It closes when
-// Select is let go: the game opens the menu while Select is held
-// (joypad1H_last), so closing at the press opened it again at once
-static bool g_select_menu_closing;
-
 void RenderText_Draw_Choose1Or2() {  // 8ecf72
   uint8 y;
   if (text_wait_countdown2 != 0) {
@@ -3615,13 +3605,6 @@ void RenderText_Draw_Choose1Or2() {  // 8ecf72
   } else if ((y = filtered_joypad_L & 0xc0 | filtered_joypad_H) & 0xd0) {
     sound_effect_1 = 43;
     text_render_state = 4;
-  } else if (((y & 0x20) || g_select_menu_closing) && (enhanced_features0 & kFeatures0_GbaMinorFixes) &&
-             main_module_index == 14 && submodule_index == 11) {
-    g_select_menu_closing = (joypad1H_last & 0x20) != 0;
-    if (!g_select_menu_closing) {
-      choice_in_multiselect_box = 0;
-      text_render_state = 4;
-    }
   } else if (y & 12) {
     int t = y & 8 ? 0 : 1;
     if (choice_in_multiselect_box == t)
@@ -3846,12 +3829,7 @@ void Death_PrepFaint() {  // 8ffa6f
 
 
 void DisplaySelectMenu() {
-  // Correzioni minori GBA: suono all'apertura del menu di salvataggio (la GBA
-  // ha un suono suo, 0x73: qui quello dell'apertura del menu degli oggetti)
-  if (enhanced_features0 & kFeatures0_GbaMinorFixes)
-    sound_effect_2 = 17;
   choice_in_multiselect_box_bak = choice_in_multiselect_box;
-  g_select_menu_closing = false;
   dialogue_message_index = 0x186;
   uint8 bak = main_module_index;
   Main_ShowTextMessage();

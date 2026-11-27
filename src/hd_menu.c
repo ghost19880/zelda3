@@ -1920,11 +1920,15 @@ void HdMenu_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   }
   if (menu_dim && !pause_dim) {
     // keep 1/2 of the colour with the blur, 1/4 without, at full darkening
-    int keep = 256 - menu_dim * (g_config.fx_menu_blur ? 128 : 192) / 8;
+    int keep_hud = 256 - menu_dim * (g_config.fx_menu_blur ? 128 : 192) / 8;
+    // the game already darkened under the inventory (HdFx_MenuBlur) only
+    // goes down to the same level, not twice
+    int keep_game = IntMin((int)(keep_hud / HdFx_GameDark()), 256);
     for (int y = 0; y < height; y++) {
       uint32 *row = (uint32 *)(pixels + y * pitch);
       for (int x = 0; x < width; x++) {
         uint32 c = row[x];
+        int keep = (c >> 24) == 2 ? keep_hud : keep_game;
         row[x] = (c & 0xff000000) | ((c >> 16 & 0xff) * keep >> 8) << 16 |
                  ((c >> 8 & 0xff) * keep >> 8) << 8 | ((c & 0xff) * keep >> 8);
       }

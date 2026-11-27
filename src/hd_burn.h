@@ -63,8 +63,8 @@ enum {
   kHdMaxBurning = 512,   // tile in fiamme insieme (il Medaglione della Fiamma brucia lo schermo)
   // Acqua ghiacciata: dalla Bacchetta del Ghiaccio 7 secondi, dall'Etere 14
   // (cespugli, erba e nemici congelati invece non si sciolgono da soli)
-  // kHdIceMelting: preso dal fuoco, si scioglie a chiazze come a fine tempo
-  // ma in kHdBurnTime frame, quanto dura una fiamma
+  // kHdIceMelting: preso dal fuoco (o fatto sotto la pioggia), si scioglie a
+  // chiazze come a fine tempo ma in kHdBurnTime frame, quanto dura una fiamma
   kHdIceRod = 1, kHdIceEther = 2, kHdIceMelting = 3,
   kHdRodIceTime = 420,
   kHdEtherIceTime = 840,

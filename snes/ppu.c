@@ -851,8 +851,14 @@ static void PpuDrawBackground_4bpp_mosaic(Ppu *ppu, uint y, bool sub, uint layer
         } while (++i != w);
       }
       dstz += w, x += w;
-      for (; x >= 8; x -= 8)
-        tp = (tp != tp_last) ? tp + 1 : tp_next;
+      // past the second tilemap the wide screen goes back to the first one
+      // (as NEXT_TP): it ran on into the next row of the tilemap
+      for (; x >= 8; x -= 8) {
+        if (tp != tp_last)
+          tp += 1;
+        else
+          tp = tp_next, tp_next = tp_last - 31, tp_last = tp + 31;
+      }
       w = ppu->mosaicSize;
     } while (dstz_end - dstz != 0);
   }
@@ -919,8 +925,14 @@ static void PpuDrawBackground_2bpp_mosaic(Ppu *ppu, int y, bool sub, uint layer,
         } while (++i != w);
       }
       dstz += w, x += w;
-      for (; x >= 8; x -= 8)
-        tp = (tp != tp_last) ? tp + 1 : tp_next;
+      // past the second tilemap the wide screen goes back to the first one
+      // (as NEXT_TP): it ran on into the next row of the tilemap
+      for (; x >= 8; x -= 8) {
+        if (tp != tp_last)
+          tp += 1;
+        else
+          tp = tp_next, tp_next = tp_last - 31, tp_last = tp + 31;
+      }
       w = ppu->mosaicSize;
     } while (dstz_end - dstz != 0);
   }
@@ -1784,6 +1796,7 @@ static bool ppu_evaluateSprites(Ppu* ppu, int line) {
     else
       x -= (x >= 256 + extra_left_right) * 512;
     x -= ppu->objBiasX;
+    x += ppu->objShake[(index >> 1) & 127];
     // if in x-range
     if (x <= -(spriteSize + ext + extra_left_right))
       continue;
@@ -1807,6 +1820,13 @@ static bool ppu_evaluateSprites(Ppu* ppu, int line) {
     if (ppu->objIce[(index >> 1) & 127]) {
       ice = ppu->iceRemap;
       z = 0x80 + 16 * 2 + (prio << 8);
+    }
+    // grey of the GBA: colour 5 (the outline) darker, all the others the same
+    static const uint8 kObjGreyRemap[16] = { 0, 0, 0, 0, 0, 0x10 };
+    uint8 grey = ppu->objGrey[(index >> 1) & 127];
+    if (grey && !is_shadow) {
+      ice = kObjGreyRemap;
+      z = (grey == 2 ? 0xc0 : 0x80) + (prio << 8);
     }
     if (ppu->objUnderWater[(index >> 1) & 127])
       z |= 0x800;

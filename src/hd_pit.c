@@ -602,7 +602,9 @@ static void SkyViewApply(uint8 *pixels, int pitch, int width, int height) {
   int ext = ppu->extraLeftRight;
   // centro della vista nel mondo e spostamento lento rispetto al centro stanza
   int vx = BG2HOFS_copy + ppu->bgBiasX + width / 2 - ext, vy = BG2VOFS_copy + ppu->bgBiasY + 1 + height / 2;
-  int rcx = ((g_view_room & 15) << 9) + 256, rcy = ((g_view_room >> 4 & 15) << 9) + 256;
+  int rcx, rcy;
+  HdFx_RoomOrigin(g_view_room, &rcx, &rcy);
+  rcx += 256, rcy += 256;
   int ox = g_view_cx - width / 2 + (int)((vx - rcx) * kViewParallax);
   int oy = g_view_cy - height / 2 + (int)((vy - rcy) * kViewParallax);
   // la vista resta dentro l'immagine (in cima al mondo non c'e' niente sopra)

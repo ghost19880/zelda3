@@ -570,11 +570,16 @@ static bool StartFreezing(uint16 x, uint16 y, uint8 water, bool only_water) {
   bool burnable = !only_water && IsBurnable(x, y);
   if (!burnable && !(water && FreezableCells(x, y)))
     return false;
+  // under the rain the water freezes and melts again at once: it grows in
+  // and then opens up in patches as when the fire takes it (kHdIceMelting)
+  bool rain = water && HdBurn_RainAt(x, y);
   int f = FindFrozen(x, y);
   if (f >= 0) {
     HdBurnTile *t = &g_frozen[f];
     if (!t->water || !water)
       return false;
+    if (rain)
+      return true;
     HdBurnTile n = *t;
     n.water = water, n.age = 8;
     if (HdBurn_IceLeft(&n) > HdBurn_IceLeft(t))
@@ -582,7 +587,7 @@ static bool StartFreezing(uint16 x, uint16 y, uint8 water, bool only_water) {
     return true;
   }
   if (!burnable) {
-    AddFrozen((HdBurnTile){ x, y, 0, (uint8)Rand(256), AreaOf(x, y), 0, water });
+    AddFrozen((HdBurnTile){ x, y, 0, (uint8)Rand(256), AreaOf(x, y), 0, rain ? kHdIceMelting : water });
     IndoorSetIce(x, y, true);
     return true;
   }

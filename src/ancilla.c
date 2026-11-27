@@ -1982,6 +1982,20 @@ static int Bomb_FizzleInRain(int k) {
   return 2;
 }
 
+// Various GBA fixes: Death Mountain's sky (both worlds), the clouds and the
+// open sky around the plateaus, is floor for the game (map8 0x16f, 0x17f,
+// 0x1e3, cloud edges 0x1d6-0x1dd): a bomb put or thrown there lay on the sky,
+// now it falls as into a pit
+static bool Bomb_OverSky(int k) {
+  if (player_is_indoors || !(enhanced_features0 & kFeatures0_GbaMinorFixes))
+    return false;
+  int si = BYTE(overworld_screen_index) & ~0x40;
+  if (si != 3 && si != 5 && si != 7)
+    return false;
+  uint16 e = Overworld_GetMap8AtLocation(Ancilla_GetX(k) >> 3, Ancilla_GetY(k)) & 0x1ff;
+  return e == 0x16f || e == 0x17f || e == 0x1e3 || (e >= 0x1d6 && e <= 0x1dd);
+}
+
 void Ancilla07_Bomb(int k) {  // 88955a
   if (submodule_index) {
     if (submodule_index == 8 || submodule_index == 16) {
@@ -2039,7 +2053,7 @@ label1:
         old_y = Ancilla_GetY(k) + dung_floor_y_vel;
         Ancilla_SetX(k, Ancilla_GetX(k) + dung_floor_x_vel);
       }
-    } else if (a == 0x20 || (a & 0xf0) == 0xb0 && a != 0xb6 && a != 0xbc) {
+    } else if (a == 0x20 || ((a & 0xf0) == 0xb0 && a != 0xb6 && a != 0xbc) || Bomb_OverSky(k)) {
       if (!(link_state_bits & 0x80)) {
         if (k + 1 == flag_is_ancilla_to_pick_up)
           flag_is_ancilla_to_pick_up = 0;
@@ -3166,8 +3180,8 @@ void EtherSpell_HandleRadialSpin(int k) {  // 88abef
   bool opens_mire = BYTE(overworld_screen_index) == 0x70 && !(save_ow_event_info[0x70] & 0x20) &&
                     Ancilla_CheckForEntranceTrigger(2);
   // fine dell'animazione: i nemici si congelano e con loro cespugli ed erba
-  // che si vedono; l'acqua no quando apre la Palude dei Desideri (solo li')
-  HdBurn_FreezeScreen(!opens_mire);
+  // che si vedono, e l'acqua (sotto la pioggia della Palude si scioglie subito)
+  HdBurn_FreezeScreen(true);
   load_chr_halfslot_even_odd = 1;
   byte_7E0324 = 0;
   state_for_spin_attack = 0;

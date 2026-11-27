@@ -1249,8 +1249,8 @@ static bool DungWarpCell(int ox, int oy, int col, int row) {
 
 // Dungeon warp tiles near the screen: top-left cell of each block
 static void FindDungeonPortals(int cam_x, int cam_y, int ext, int width, int height) {
-  int room = HdFx_LoadedRoom();
-  int ox = (room & 15) << 9, oy = (room >> 4 & 15) << 9;
+  int ox, oy;
+  HdFx_RoomOrigin(HdFx_LoadedRoom(), &ox, &oy);
   for (int row = 0; row < 64; row++) {
     int wy = oy + row * 8;
     if (wy < cam_y - 16 || wy > cam_y + height + 16)
@@ -1750,11 +1750,20 @@ bool HdFx_IsRainingInArea(int si) {
     return !(save_ow_event_info[0x70] & 0x20);  // Palude della Miseria
   // Prima del salvataggio di Zelda piove nel Mondo della Luce, tranne dove ci
   // sono le nuvole del Monte Morte
-  return sram_progress_indicator < 2 && !(si & 0x40) && si != 3 && si != 5 && si != 7;
+  if (sram_progress_indicator >= 2 || (si & 0x40))
+    return false;
+  // Death Mountain reached in the prologue keeps the rain layer of the area
+  // it came from (continuous world): it rains there too
+  return (si != 3 && si != 5 && si != 7) || overlay_index == 0x9f;
 }
 
+// in the old world's area during the mirror and warp tiles, as the game's
+// rain layer (it comes with the new world)
 static bool IsRaining(int mod) {
-  return mod == 9 && HdFx_IsRainingInArea(BYTE(overworld_screen_index));
+  int si = BYTE(overworld_screen_index);
+  if (HdWorld_WarpShowsOldWorld())
+    si ^= 0x40;
+  return mod == 9 && HdFx_IsRainingInArea(si);
 }
 
 // Acqua: i pixel del fondale che cadono su caselle d'acqua (profonda 0x08,
@@ -1932,6 +1941,10 @@ int HdFx_LoadedRoom(void) {
   if (!HdFx_DungeonPassing() || g_hd_loaded_room < 0)
     g_hd_loaded_room = dungeon_room_index;
   return g_hd_loaded_room;
+}
+
+void HdFx_RoomOrigin(int room, int *ox, int *oy) {
+  *ox = (room & 15) << 9, *oy = (room >> 4 & 0x1f) << 9;
 }
 
 bool HdFx_RoomScroll(void) {
@@ -3169,6 +3182,28 @@ static void DialogGlass(uint8 *pixels, int pitch, int width, int height) {
     frame += IsHud(fr[x]);
   if (frame * 10 < w * 7)
     return;
+  // Only inside the frame: the 24 x 8 tiles also hold a pixel or two of the
+  // game around the border (the frame's tiles are not full), which were
+  // blurred too and the blur came out of the box. A pixel is inside with the
+  // frame on its left and right in its row and above and below in its column
+  static int16 row_l[240], row_r[240], col_t[512], col_b[512];
+  if (h > 240 || w > 512)
+    return;
+  for (int y = 0; y < h; y++)
+    row_l[y] = w, row_r[y] = -1;
+  for (int x = 0; x < w; x++)
+    col_t[x] = h, col_b[x] = -1;
+  for (int y = 0; y < h; y++) {
+    const uint32 *row = (const uint32 *)(pixels + (y0 + y) * pitch) + x0;
+    for (int x = 0; x < w; x++) {
+      if (!IsHud(row[x]))
+        continue;
+      if (row_l[y] > x) row_l[y] = x;
+      row_r[y] = x;
+      if (col_t[x] > y) col_t[x] = y;
+      col_b[x] = y;
+    }
+  }
   // come dietro i menu: l'interfaccia non entra nella media
   const int32 *acc = BlurRect(pixels, pitch, x0, y0, w, h, false);
   if (!acc)
@@ -3179,6 +3214,8 @@ static void DialogGlass(uint8 *pixels, int pitch, int width, int height) {
     for (int x = 0; x < w; x++, b += 4) {
       uint32 c = row[x];
       if (IsHud(c) || b[3] == 0)
+        continue;
+      if (x <= row_l[y] || x >= row_r[y] || y <= col_t[x] || y >= col_b[x])
         continue;
       // strato 2 (interfaccia): lo shader lascia il riquadro sfocato com'e',
       // senza pennellate e ombre nitide sopra
@@ -3199,7 +3236,17 @@ float HdFx_MenuBlurAmount(void) {
   return HdFx_MenuBlurActive() ? g_blur_amount : 0.0f;
 }
 
+// What HdFx_MenuBlur did to the game (not the interface) in this draw: the
+// options menu over the inventory adds only what is missing (HdFx_BlurAll,
+// HdFx_GameDark), so the game stays as it was instead of being blurred twice
+static float g_blur_applied, g_blur_dark = 1.0f;
+
+float HdFx_GameDark(void) {
+  return g_blur_dark;
+}
+
 void HdFx_MenuBlur(uint8 *pixels, int pitch, int width, int height) {
+  g_blur_applied = 0, g_blur_dark = 1.0f;
   DialogGlass(pixels, pitch, width, height);
   float amount = g_blur_amount;
   static uint8 last_frame;
@@ -3223,16 +3270,15 @@ void HdFx_MenuBlur(uint8 *pixels, int pitch, int width, int height) {
   }
   if (amount <= 0)
     return;
-  // due passate orizzontali e verticali di raggio 3: quasi una gaussiana
-  // under the options menu everything is blurred, the interface too
-  // (HdMenu_Draw, HdFx_BlurAll): not the game twice
-  if (HdMenu_DimSteps() > 0)
-    return;
+  // due passate orizzontali e verticali di raggio 3: quasi una gaussiana.
+  // Under the options menu the interface is blurred too (HdMenu_Draw,
+  // HdFx_BlurAll), the game only once
   const int32 *acc = BlurRect(pixels, pitch, 0, 0, width, height, false);
   if (!acc)
     return;
   // during the dimmed pause the darkening is the pause one (HdMenu_Draw)
   float keep = 1.0f - amount, dark = Host_PauseDimmed() ? 1.0f : 1.0f - 0.30f * amount;
+  g_blur_applied = amount, g_blur_dark = dark;
   for (int y = 0; y < height; y++) {
     uint32 *row = (uint32 *)(pixels + y * pitch);
     const int32 *b = acc + y * width * 4;
@@ -3255,13 +3301,18 @@ void HdFx_BlurAll(uint8 *pixels, int pitch, int width, int height, float amount)
   const int32 *acc = BlurRect(pixels, pitch, 0, 0, width, height, true);
   if (!acc)
     return;
-  float keep = 1.0f - amount;
+  // the game already blurred by HdFx_MenuBlur (inventory, or the same fade
+  // of the options menu) only gets what is missing
+  float game = amount - g_blur_applied;
   for (int y = 0; y < height; y++) {
     uint32 *row = (uint32 *)(pixels + y * pitch);
     const int32 *b = acc + y * width * 4;
     for (int x = 0; x < width; x++, b += 4) {
       uint32 c = row[x];
-      float inv = amount / b[3];
+      float a = IsHud(c) ? amount : game;
+      if (a <= 0)
+        continue;
+      float keep = 1.0f - a, inv = a / b[3];
       int r = (int)(((c >> 16) & 0xff) * keep + b[0] * inv);
       int g = (int)(((c >> 8) & 0xff) * keep + b[1] * inv);
       int bl = (int)((c & 0xff) * keep + b[2] * inv);
@@ -3626,22 +3677,45 @@ static void PrayerIris(uint8 *pixels, int pitch, int width, int height) {
 
 enum { kIrisSoft = 8 };
 
-// Centre and radius of the soft circle on a picture width x height
+// The game draws an oval twice as wide as it is tall (IrisSpotlight_
+// CalculateCircleValue: half width 2r, half height r) centred on Link. The
+// soft one has the same shape and centre, and the same size until near the
+// end; growing it reaches the farthest corner of the picture when the
+// game's is fully open (126), so that it also covers the wide screen.
 static void IrisCircle(int width, int height, float *pcx, float *pcy, float *pr) {
   const float kSoft = kIrisSoft;
   int ext = (width - 256) / 2;
   // con la vista spostata (mondo continuo) Link, e con lui il centro del
   // cerchio, si disegna spostato come gli sprite
   Ppu *ppu = g_zenv.ppu;
-  float cx = g_hd_iris_x - ppu->objBiasX + ext + 0.5f, cy = g_hd_iris_y - ppu->objBiasY + 0.5f;
+  float cx = g_hd_iris_x - ppu->objBiasX + ext, cy = g_hd_iris_y - ppu->objBiasY;
   float far2 = 0;
   for (int k = 0; k < 4; k++) {
-    float dx = (k & 1 ? width : 0) - cx, dy = (k & 2 ? height : 0) - cy;
+    float dx = ((k & 1 ? width : 0) - cx) * 0.5f, dy = (k & 2 ? height : 0) - cy;
     if (dx * dx + dy * dy > far2)
       far2 = dx * dx + dy * dy;
   }
+  // the growth only over the last four steps of the game (7 a frame, the
+  // last one, 119, already covering everything, soft edge included), so
+  // that before it the oval is the game's
+  float r = g_hd_iris_r, extra = sqrtf(far2) + 2 * kSoft - r, t = (r - 91) * (1.0f / 28);
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
   *pcx = cx, *pcy = cy;
-  *pr = g_hd_iris_r * (1.0f / 126) * (sqrtf(far2) + kSoft);
+  *pr = r + (extra > 0 ? extra * t * t * (3 - 2 * t) : 0);
+}
+
+// How far inside the soft edge of the oval of half height r the pixel is, in
+// pixels across the edge (0 or less: black). The soft edge straddles the
+// game's edge, half inside and half outside
+static float IrisInside(float dx, float dy, float r) {
+  if (r <= 0)
+    return 0;  // closed: the game shows nothing
+  float hx = dx * 0.5f, d = sqrtf(hx * hx + dy * dy);
+  if (d < 1e-3f)
+    return r + kIrisSoft * 0.5f;
+  // gradient of the oval distance, to measure the edge in screen pixels
+  float g = sqrtf(hx * hx * 0.25f + dy * dy) / d;
+  return (r - d) / g + kIrisSoft * 0.5f;
 }
 
 bool HdFx_IrisCovering(void) {
@@ -3663,7 +3737,7 @@ float HdFx_IrisCover(int x, int y, int width, int height) {
     return 1;
   float cx, cy, r;
   IrisCircle(width, height, &cx, &cy, &r);
-  float dx = x - cx, dy = y - cy, k = (r - sqrtf(dx * dx + dy * dy)) / kIrisSoft;
+  float k = IrisInside(x - cx, y - cy, r) / kIrisSoft;
   if (k >= 1)
     return 1;
   if (k <= 0)
@@ -3679,14 +3753,17 @@ void HdFx_SoftIris(uint8 *pixels, int pitch, int width, int height) {
   const float kSoft = kIrisSoft;
   float cx, cy, r;
   IrisCircle(width, height, &cx, &cy, &r);
+  // well inside: the oval shrunk by the soft edge (the edge is at most kSoft
+  // high there, 2 kSoft wide)
+  float in = r > kSoft ? r - kSoft : 0;
   for (int y = 0; y < height; y++) {
     uint32 *row = (uint32 *)(pixels + y * pitch);
     float dy = y - cy;
     for (int x = 0; x < width; x++) {
-      float dx = x - cx, d2 = dx * dx + dy * dy;
-      if (r > kSoft && d2 < (r - kSoft) * (r - kSoft))
+      float hx = (x - cx) * 0.5f;
+      if (hx * hx + dy * dy < in * in)
         continue;
-      float k = (r - sqrtf(d2)) / kSoft;
+      float k = IrisInside(x - cx, dy, r) / kSoft;
       if (k >= 1)
         continue;
       if (k < 0) k = 0;
@@ -3727,6 +3804,13 @@ static bool IsGameShadowTile(uint16 oam1) {
   return (oam1 >> 9 & 7) == 4 && ((oam1 & 0x1ff) == 0x6c || (oam1 & 0x1ff) == 0x38);
 }
 
+// Water ripples around an enemy standing in shallow water (SpriteDraw_WaterRipple:
+// tiles 0xd8-0xda of the first table, palette 2; the walking Zoras): they lie
+// on the water, so they cast no soft shadow
+static bool IsWaterRippleTile(uint16 oam1) {
+  return (oam1 >> 9 & 7) == 2 && (oam1 & 0x1ff) >= 0xd8 && (oam1 & 0x1ff) <= 0xda;
+}
+
 // Nemici che non camminano: volano o fluttuano (corvi, avvoltoi, pipistrelli,
 // api, fate, Poe, Bari, Zirro...), stanno in acqua o sui muri, o sono oggetti
 // fissi (interruttori, statue, Beamos, trappole, barre di fuoco). Non fanno
@@ -3762,6 +3846,8 @@ static bool HiddenEnemy(int k) {
   case 0x64: return ai != 2;             // Debirando: fuori solo quando sputa fuoco
   case 0xa1: return ai < 2;              // Freezor: statua nel muro finche' non si stacca
   case 0x73: return sprite_E[k] == 2;    // non e' un nemico: il blocco del Santuario
+  case 0x56: return sprite_B[k] < 2;     // walking Zora under water or surfacing: its whirlpool
+                                         // is the river Zora's (Zora_Draw), no shadow as 0x55
   }
   return false;
 }
@@ -3821,7 +3907,7 @@ bool HdFx_ShadowMarks(Ppu *ppu, int height, const uint8 *owner, const uint8 *lin
       if (shadow)
         hide[i] = true;
       else
-        cast[i] = 1;
+        cast[i] = !IsWaterRippleTile(ppu->oam[i * 2 + 1]);
     }
   }
   return true;
@@ -3908,6 +3994,54 @@ void HdFx_IceBeforeRender(Ppu *ppu) {
     else
       ppu->objIce[i] = (oam1 & 0x1ff) == 0x48 || (oam1 & 0x1ff) == 0x58;
   }
+}
+
+// Fewer flashes (GBA): the GBA draws every piece written for an enemy whose
+// obj_prio has palette bits (0xe) with its sprite palette 8, a flat grey
+// 0x5ad6 with colour 5 0x39ce (OAM writer 0x80c6efe, palette 0x843b548).
+// Here those entries are marked for the PPU (objGrey), with the half of the
+// palette the piece has without obj_prio (palettes 4-7 take part in the
+// colour math), and the grey goes into colour 0 of sprite palettes 0/1 and 4/5.
+// The same writer moves every piece (shadow included) of an enemy whose hit
+// timer runs 2 pixels right on the frames the timer is odd: it shakes (objShake)
+static const uint8 kGreyCgram[4] = { 0x80, 0x90, 0xc0, 0xd0 };
+static uint16 g_grey_saved[4];
+static bool g_grey_set;
+
+void HdFx_GreyBeforeRender(Ppu *ppu) {
+  memset(ppu->objGrey, 0, sizeof(ppu->objGrey));
+  memset(ppu->objShake, 0, sizeof(ppu->objShake));
+  g_grey_set = false;
+  if (!(enhanced_features0 & kFeatures0_DimFlashesGba) || ppu->mode == 7)
+    return;
+  bool any = false;
+  for (int i = 0; i < 128; i++) {
+    int o = g_sprite_oam_owner[i];
+    if (o >= 16 || g_link_oam_mask[i])
+      continue;
+    if (sprite_hit_timer[o])
+      ppu->objShake[i] = (sprite_hit_timer[o] & 1) * 2;
+    if (!(sprite_obj_prio[o] & 0xe))
+      continue;
+    int pal = (ppu->oam[i * 2 + 1] >> 9 & 7) ^ (sprite_obj_prio[o] >> 1 & 7);
+    ppu->objGrey[i] = pal >= 4 ? 2 : 1;
+    any = true;
+  }
+  if (!any)
+    return;
+  for (int i = 0; i < 4; i++) {
+    g_grey_saved[i] = ppu->cgram[kGreyCgram[i]];
+    ppu->cgram[kGreyCgram[i]] = (i & 1) ? 0x39ce : 0x5ad6;
+  }
+  g_grey_set = true;
+}
+
+void HdFx_GreyAfterRender(Ppu *ppu) {
+  if (!g_grey_set)
+    return;
+  for (int i = 0; i < 4; i++)
+    ppu->cgram[kGreyCgram[i]] = g_grey_saved[i];
+  g_grey_set = false;
 }
 
 // Oggetti spinti che da fermi sono caselle del fondale: il blocco dei

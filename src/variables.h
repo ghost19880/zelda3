@@ -388,6 +388,9 @@ enum { kAncilla_LinkSlots = 15, kAncilla_Slots = 20 };
 #define g_gba_bolt_timer (*(uint8*)(g_ram+0x1F598))
 #define g_gba_bolt_len (*(uint8*)(g_ram+0x1F599))
 #define g_agah2_lightning (*(GbaLightning *)(g_ram+0x1F59A))  // 2 bytes
+#define g_snes_lag_key (*(uint8*)(g_ram+0x1F59C))        // ending part timed as on the SNES (ZeldaRunFrame)
+#define g_snes_lag_hold (*(uint8*)(g_ram+0x1F59D))       // SNES lag frames still to wait there
+#define g_snes_lag_poly (*(uint8*)(g_ram+0x1F59E))       // the 3D Triforce drawn every second frame
 #define ancilla_arr26 ((uint8*)(g_ram+0x1F298))
 #define ancilla_arr25 ((uint8*)(g_ram+0x1F2AC))
 #define ancilla_arr22 ((uint8*)(g_ram+0x1F2C0))

@@ -277,6 +277,10 @@ static int g_warp_floor;      // 0-31: livello sotto cui nessun colore scende
 static bool g_warp_old_world; // prima del cambio: lo schermo mostra il mondo di prima
 static uint16 g_warp_real_pal[256];  // colori di prima dell'animazione
 static uint16 g_warp_cgram[256];     // colori della PPU durante il disegno
+// the colours the PPU drew the frame with (the true ones): the weather layer
+// over the area images must use them too, or it was whitened twice there (a
+// white column at the edge of the wide screen, mirror back from the Swamp)
+static uint16 g_warp_drawn_cgram[256];
 static uint16 g_warp_bg1, g_warp_bg2;
 static uint8 *g_warp_mask;    // 0 fondale, 1 sprite, 2 HUD (dal frame della PPU)
 static uint32 *g_warp_row;
@@ -287,6 +291,12 @@ static int g_warp_cap;
 static bool InMirrorWarp(void) {
   return (g_config.fx_water || Host_HasShader()) && main_module_index == 9 && (submodule_index == 0x23 || submodule_index == 0x2c) &&
          subsubmodule_index >= 1 && !player_is_indoors && BYTE(overworld_screen_index) < 0x80;
+}
+
+// (AnimateMirrorWarp draws the new world in its step 7)
+bool HdWorld_WarpShowsOldWorld(void) {
+  return main_module_index == 9 && (submodule_index == 0x23 || submodule_index == 0x2c) &&
+         subsubmodule_index >= 1 && !player_is_indoors && overworld_map_state < 7;
 }
 
 static bool WarpFiltered(int i) {
@@ -321,7 +331,7 @@ void HdWorld_WarpBeforeRender(void) {
       }
     }
   }
-  g_warp_old_world = overworld_map_state < 7;
+  g_warp_old_world = HdWorld_WarpShowsOldWorld();
   // la PPU disegna con i colori veri: quelli di prima, poi quelli nuovi
   const uint16 *real = loaded ? aux_palette_buffer : g_warp_real_pal;
   memcpy(g_warp_cgram, ppu->cgram, sizeof(g_warp_cgram));
@@ -329,6 +339,7 @@ void HdWorld_WarpBeforeRender(void) {
     if (WarpFiltered(i))
       ppu->cgram[i] = real[i];
   ppu->cgram[0] = real[0x20];  // il fondale segue il colore 0x20 (PaletteFilter_StartBlindingWhite)
+  memcpy(g_warp_drawn_cgram, ppu->cgram, sizeof(g_warp_drawn_cgram));
   g_warp_bg1 = BG1HOFS_copy, g_warp_bg2 = BG2HOFS_copy;
 }
 
@@ -1308,8 +1319,14 @@ static void LoadFields(int k, const uint8 *d) {
 // (0x2e, he vanishes when Link comes near) and his animals (0x9e-0xa0, they
 // run away then). Remembered, the boy stayed gone after Link left the area
 // and came back, and the animals waited for him forever
+// Also the sprites whose preparation looks at Link's companion: the
+// locksmith (0x39, he takes the purple chest only when it follows Link as he
+// appears), the purple chest (0xb4, gone while it follows Link, back where it
+// was if Link loses it) and the smithy (0x1a). Remembered as they were, the
+// locksmith seen once without the chest stayed in his idle state and ignored
+// the chest brought to him
 static bool IsReplayedScene(uint8 type) {
-  return type == 0x2e || (type >= 0x9e && type <= 0xa0);
+  return type == 0x2e || (type >= 0x9e && type <= 0xa0) || type == 0x39 || type == 0xb4 || type == 0x1a;
 }
 
 // Copia i nemici dell'area caricata in questo momento (quella corrente, o
@@ -2532,12 +2549,17 @@ static void OverlayBegin(OverlayCtx *o, int ext) {
 
 // Colore (BGR a 15 bit) dello strato BG1 nel pixel sx, sy dello schermo; -1
 // dove e' trasparente
+// Colours the PPU drew the frame with (the mirror swaps them while drawing)
+static const uint16 *DrawnCgram(void) {
+  return g_warp_on ? g_warp_drawn_cgram : g_zenv.ppu->cgram;
+}
+
 static int OverlayColor(const OverlayCtx *o, int sx, int sy) {
   Ppu *ppu = g_zenv.ppu;
   int c = HdFx_BgTilePixel(ppu, &ppu->bgLayer[0], o->x0 + sx, o->y0 + sy);
   if (c && o->flat)
     c = (c & ~0xf) | 1;
-  return c ? HdFx_RealBg(ppu->cgram, c) : -1;
+  return c ? HdFx_RealBg(DrawnCgram(), c) : -1;
 }
 
 int HdWorld_OverlayColorAt(int sx, int sy) {
@@ -2573,7 +2595,7 @@ static inline uint32 OverlayBlend(const OverlayCtx *o, uint32 c, int sx, int sy)
     bool half = o->half && col >= 0;
     if (col < 0)
       col = FixedColor15(ppu);
-    int base = ppu->cgram[0], ch[3];
+    int base = DrawnCgram()[0], ch[3];
     for (int k = 0; k < 3; k++) {
       int v = (base >> (5 * k) & 31) + (col >> (5 * k) & 31);
       if (half) v >>= 1;
@@ -3349,6 +3371,8 @@ static void HideObj(Ppu *p, int i) {
 // that do not apply to a separate drawing
 static void ClearObjEffects(Ppu *p) {
   memset(p->objIce, 0, sizeof(p->objIce));
+  memset(p->objGrey, 0, sizeof(p->objGrey));
+  memset(p->objShake, 0, sizeof(p->objShake));
   memset(p->objUnderWater, 0, sizeof(p->objUnderWater));
   memset(p->objAsBg, 0, sizeof(p->objAsBg));
 }
@@ -3852,12 +3876,14 @@ static bool LiveBuild(LiveArea *la, int head, int vx, int vy) {
   overworld_area_index = head;
   LoadAreaLikeExit(head);
   num_memorized_tiles = 0;
-  follower_indicator = 0;  // il compagno di Link resta con Link
   SetLiveCamera(vx, vy);
   Sprite_DisableAll();  // nemici, oggetti in volo e scintille dell'area corrente
   for (int k = 0; k < 16; k++)
     sprite_state[k] = 0;
+  // the sprites are prepared seeing Link's real companion (the purple chest
+  // that follows Link is not put back at its place in the copy)
   Sprite_OverworldReloadAll_justLoad();
+  follower_indicator = 0;  // il compagno di Link resta con Link
   memcpy(g_zenv.ppu->cgram, main_palette_buffer, 0x200);
   la->used = true;
   la->head = head;
@@ -3960,7 +3986,11 @@ static void LiveTick(LiveArea *la, int vx, int vy, const LiveLink *m) {
   filtered_joypad_L = filtered_joypad_H = joypad1L_last = joypad1H_last = 0;
   SetLiveCamera(vx, vy);
   Sprite_ActivateAllProxima();
+  // new sprites are prepared seeing Link's real companion (as in LiveBuild);
+  // the copy's own steps run without it (Sprite_Main moves the companion)
+  follower_indicator = g_saved_ram[(uint8 *)&follower_indicator - g_ram];
   Sprite_OverworldLoadAllEnemies();
+  follower_indicator = 0;
   MakeRoomNearLink();
   uint8 was[16];
   uint16 px[16], py[16];

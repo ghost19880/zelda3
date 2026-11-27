@@ -602,14 +602,25 @@ void Tagalong_Draw() {  // 89a907
 
 static inline void SetOam_Follower(OamEnt *oam, uint16 x, uint16 y, uint8 charnum, uint8 flags, uint8 big) {
   oam->x = x;
-  oam->y = (uint16)(x + 0x80) < 0x180 && (big |= x >> 8 & 1, (uint16)(y + 0x10) < 0x100) ? y : 0xf0;
+  // continuous world: also above or below the game camera (SpriteDraw_YVisible),
+  // which jumps into the next area while the view goes on: crossing an area
+  // edge the purple chest behind Link vanished for some frames
+  oam->y = (uint16)(x + 0x80) < 0x180 && (big |= x >> 8 & 1, SpriteDraw_YVisible(y)) ? y : 0xf0;
+  if (!g_hd_neighbor_tick)
+    g_oam_real_f0[oam - oam_buf] = (uint8)y == 0xf0 && g_view_valid;
   oam->charnum = charnum;
   oam->flags = flags;
   bytewise_extended_oam[oam - oam_buf] = big;
 }
 
 
+// Where the companion was drawn last (world coordinates) and on which frame
+// (frame_counter | 0x100): a reference for its pieces when the view is moved
+// (ResolveSpritePositions, zelda_rtl.c)
+uint16 g_follower_drawn_x, g_follower_drawn_y, g_follower_drawn_frame;
+
 void Follower_AnimateMovement_preserved(uint8 ain, uint16 xin, uint16 yin) {  // 89a959
+  g_follower_drawn_x = xin, g_follower_drawn_y = yin, g_follower_drawn_frame = frame_counter | 0x100;
 
   uint8 yt = 0, av = 0;
   uint8 sc = 0;

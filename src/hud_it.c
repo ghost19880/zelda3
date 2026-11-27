@@ -888,7 +888,7 @@ static void FloorLabelsToItalian(Ppu *ppu) {
     int idx[3] = { i, j, -1 };
     if (n == 3) {
       while (spare < 128 && ((ppu->oam[2 * spare] >> 8) != 0xf0 || ppu->objScale[spare] ||
-                            ppu->objIce[spare] || ppu->objUnderWater[spare] ||
+                            ppu->objIce[spare] || ppu->objGrey[spare] || ppu->objShake[spare] ||ppu->objUnderWater[spare] ||
                             ppu->objAsBg[spare] || ppu->objCastShadow[spare]))
         spare++;
       if (spare >= 128)

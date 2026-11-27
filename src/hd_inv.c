@@ -53,6 +53,7 @@ static int g_icur;              // free cursor of the Items page (slot), see Fre
 static int g_pop, g_pop_dir;    // frames of the push of the arrow of side g_pop_dir
 static bool g_was_open;
 static uint8 g_last_frame;
+static int g_cursor_frames;     // game frames since the menu opened (cursor beat)
 static uint8 g_saved_tm[2];
 static bool g_tm_saved;
 
@@ -643,8 +644,10 @@ static void RoundPlace(float cx, float cy, float r) {
 }
 
 // Cursor: four corners just outside the slot
+// The corners beat as in The Minish Cap: 16 frames in, 16 frames one pixel
+// out on both axes (measured there with mGBA)
 static void Cursor(float x, float y, float w, float h) {
-  float g = 2, L = 5, t = 1.5f;
+  float g = 2 + (g_cursor_frames >> 4 & 1), L = 5, t = 1.5f;
   for (int i = 0; i < 4; i++) {
     float cx = (i & 1) ? x + w + g : x - g, cy = (i & 2) ? y + h + g : y - g;
     float sx = (i & 1) ? -1 : 1, sy = (i & 2) ? -1 : 1;
@@ -764,7 +767,9 @@ static void DrawItemsPage(float x, float y) {
       bool yellow = (enhanced_features0 & kFeatures0_ShowMaxItemsInYellow) && n == max;
       Digits(buf, sx + kSlot - 2, sy + kSlot - 2, yellow ? 0xffde52 : 0xf8f8f8);
     }
-    // buttons the item is on
+    // buttons the item is on (none with Y alone: the cursor is the Y item)
+    if (!FreeCursor())
+      continue;
     float bx = sx + kSlot - 2, by = sy + 2;
     if (item == hud_cur_item) Badge(bx, by, 'Y'), bx -= 9;
     if (Hud_ItemOnX() && item == hud_cur_item_x) Badge(bx, by, 'X'), bx -= 9;
@@ -925,6 +930,7 @@ void HdInv_Draw(uint8 *pixels, int pitch, int width, int height, int scale) {
   int steps = HdFx_GameSteps(&g_last_frame);
   g_slide = g_slide > steps ? g_slide - steps : 0;
   g_pop = g_pop > steps ? g_pop - steps : 0;
+  g_cursor_frames += steps;
   // even fade over the whole opening (an ease out made it all happen in
   // the first few frames)
   float e = open * open * (3 - 2 * open);
@@ -1124,7 +1130,7 @@ void HdInv_BeforeRender(Ppu *ppu) {
   g_tm_saved = false;
   bool on = HdInv_Enabled();
   if (on && !g_was_open)
-    g_arrow = 0, g_slide = 0, g_pop = 0;  // the menu opens: cursor on the page
+    g_arrow = 0, g_slide = 0, g_pop = 0, g_cursor_frames = 0;  // the menu opens: cursor on the page
   if (on && !g_was_open) {
     // the free cursor starts on the item on Y
     g_icur = Hud_MenuSlotOf(hud_cur_item);

@@ -1500,10 +1500,11 @@ void IrisSpotlight_ConfigureTable() {  // 80f312
 
   memcpy(hdma_table_unused, hdma_table_dynamic, 224  * sizeof(uint16));
 
-  spotlight_var1 += kSpotlight_delta_size[spotlight_var2 >> 1];
+  // the radius the table above was made with (it grows after it)
   g_hd_iris_x = (int16)spotlight_var3;
   g_hd_iris_y = (int16)r14;
   g_hd_iris_r = spotlight_var1;
+  spotlight_var1 += kSpotlight_delta_size[spotlight_var2 >> 1];
 
   if (spotlight_var1 != kSpotlight_goal[spotlight_var2 >> 1])
     return;
@@ -1512,6 +1513,7 @@ void IrisSpotlight_ConfigureTable() {  // 80f312
     INIDISP_copy = 0x80;
   } else {
     IrisSpotlight_ResetTable();
+    g_hd_iris_r = spotlight_var1;  // fully open: no window this frame
   }
   subsubmodule_index = 0;
   submodule_index = 0;

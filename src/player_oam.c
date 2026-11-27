@@ -789,6 +789,7 @@ int LinkOam_DrawnHeight(void) {
 
 void LinkOam_Main() {
   static OamEnt saved[128];
+  LinkRod_CancelInDoorway();
   memcpy(saved, oam_buf, sizeof(saved));
   // segno nella grafica (tile 0xff, tutti gli attributi): nessun pezzo vero
   // lo usa, mentre una posizione qualsiasi puo' essere quella di un pezzo
@@ -945,7 +946,12 @@ link_state_is_empty:
     goto continue_after_set;
   }
 
-  if (link_item_in_hand != 0) {
+  if (Link_RodWalks()) {
+    // FsaItems: the body of the charged sword walking, the rod held out
+    // (drawn below from the rod's own pose)
+    yt = 2, rt = link_animation_steps < 6 ? link_animation_steps : 0;
+    goto continue_after_set;
+  } else if (link_item_in_hand != 0) {
     yt = kPlayerOam_Tab2[FindMostSignificantBit(link_item_in_hand)];
     rt = player_handler_timer;
     goto continue_after_set;
@@ -985,6 +991,15 @@ continue_after_set:
 
   int r2 = kPlayerOamOtherOffs[dir * 40 + yt] + rt;
   int r4loc = kPlayerOamSpriteLocs[r2];
+  // weapon and its second piece: the rod held out (pose 2 of the rod) moved
+  // as the charged sword moves with the steps (Link_RodWalks)
+  int r2w = r2, wdx = 0, wdy = 0;
+  if (yt == 2 && Link_RodWalks()) {
+    int sword0 = kPlayerOamOtherOffs[dir * 40 + 2];
+    r2w = kPlayerOamOtherOffs[dir * 40 + kPlayerOam_Tab2[0]] + 2;
+    wdx = kDrawSword_x[r2] - kDrawSword_x[sword0];
+    wdy = kDrawSword_y[r2] - kDrawSword_y[sword0];
+  }
 
   link_palette_bits_of_oam = palette_swap_flag ? 0 : 0xe00;
   link_dma_var1 = link_dma_var2 = 0;
@@ -1025,10 +1040,10 @@ continue_after_set:
 
   if (link_picking_throw_state & 4) {
     LinkOam_UnusedWeaponSettings(r4loc, xcoord, ycoord);
-  } else if (PlayerOam_WantInvokeSword() && !LinkOam_SetWeaponVRAMOffsets(r2, &sr)) {
+  } else if (PlayerOam_WantInvokeSword() && !LinkOam_SetWeaponVRAMOffsets(r2w, &sr)) {
     uint8 zcoord = ((int16)link_z_coord >= 0 || BYTE(link_z_coord) < 0xf0) ? BYTE(link_z_coord) : 0;
-    uint8 oam_y = kDrawSword_y[r2] + ycoord - zcoord;
-    uint8 oam_x = kDrawSword_x[r2] + xcoord;
+    uint8 oam_y = kDrawSword_y[r2w] + wdy + ycoord - zcoord;
+    uint8 oam_x = kDrawSword_x[r2w] + wdx + xcoord;
 
     if ((link_item_in_hand & 2) ? (player_handler_timer == 2 && link_delay_timer_spin_attack == 15) : ((link_item_in_hand & 5) == 0)) {
       player_oam_y_offset = kSwordOamYOffs[r2];
@@ -1069,12 +1084,12 @@ continue_after_set:
   }
 
   //SwordStuff_fail
-  if (link_shield_type && sram_progress_indicator && !LinkOam_SetEquipmentVRAMOffsets(r2, &sr)) {
+  if (link_shield_type && sram_progress_indicator && !LinkOam_SetEquipmentVRAMOffsets(r2w, &sr)) {
     uint8 zcoord = ((int16)link_z_coord >= 0 || BYTE(link_z_coord) < 0xf0) ? BYTE(link_z_coord) : 0;
-    uint8 oam_y = kShieldStuff_y[r2] + ycoord - 1 - zcoord;
-    uint8 oam_x = kShieldStuff_x[r2] + xcoord;
+    uint8 oam_y = kShieldStuff_y[r2w] + wdy + ycoord - 1 - zcoord;
+    uint8 oam_x = kShieldStuff_x[r2w] + wdx + xcoord;
 
-    LinkOam_CalculateXOffsetRelativeLink(kShieldStuff_x[r2]);
+    LinkOam_CalculateXOffsetRelativeLink(kShieldStuff_x[r2w] + wdx);
 
     uint16 oam_pal = (link_palette_bits_of_oam >> 8) ? 0xa00 : 0x600;
 

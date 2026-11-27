@@ -309,11 +309,16 @@ static inline float FlamePulse(float tf, float ph) {
 
 // Luce di una torcia o di un braciere: grande e calda nelle stanze buie,
 // piccola altrove
-static void TorchLight(float x, float y, float pulse, bool dark, int dir) {
+// (grow: radius of a bigger fire, 1 for a torch)
+static void TorchLightSized(float x, float y, float pulse, bool dark, int dir, float grow) {
   if (dark)
-    AddFireLightDir(x, y, 100 * pulse, 1.30f * pulse, 1.05f * pulse, 0.72f * pulse, 0.8f, dir);
+    AddFireLightDir(x, y, 100 * grow * pulse, 1.30f * pulse, 1.05f * pulse, 0.72f * pulse, 0.8f, dir);
   else
-    AddFireLightDir(x, y, 40 * (0.92f + 0.08f * pulse), 0.68f * pulse, 0.44f * pulse, 0.16f * pulse, 0.8f, dir);
+    AddFireLightDir(x, y, 40 * grow * (0.92f + 0.08f * pulse), 0.68f * pulse, 0.44f * pulse, 0.16f * pulse, 0.8f, dir);
+}
+
+static void TorchLight(float x, float y, float pulse, bool dark, int dir) {
+  TorchLightSized(x, y, pulse, dark, dir, 1.0f);
 }
 
 static bool IsFireAncilla(int type, float *radius) {
@@ -373,7 +378,8 @@ static void CollectLights(const uint8 *pixels, int pitch, int height, int mod, b
     int room = HdFx_LoadedRoom();
     // origine della stanza caricata: torce e decorazioni sono sue (nei
     // passaggi la telecamera e' per un po' ancora nella stanza di prima)
-    int ox = (room & 15) << 9, oy = (room >> 4 & 15) << 9;
+    int ox, oy;
+    HdFx_RoomOrigin(room, &ox, &oy);
     int start = dung_index_of_torches_start >> 1;
     for (int i = start; i < start + 16; i++) {
       if (!(torch_mask >> (i - start) & 1))
@@ -797,21 +803,65 @@ static bool LavaShows(const uint8 *pixels, int pitch, int width, int height, int
   return *vis != 2;
 }
 
+// Pools of up to this many cells (two tiles apart) are fires, not lakes
+enum { kSmallLavaPool = 4 };
+
+// Torches and braziers already have their glow (room pixels)
+static bool NearDecor(int x, int y) {
+  for (int i = 0; i < g_num_decor; i++)
+    if (abs(g_decor[i].x - x) < 16 && abs(g_decor[i].y - y) < 16)
+      return true;
+  return false;
+}
+
 static void CollectLavaLights(const uint8 *pixels, int pitch, int width, int height,
                               bool dark, int ext, int cam_x, int cam_y, float t) {
   // origine della stanza caricata (le caselle lette sono sue)
   int room = HdFx_LoadedRoom();
-  int ox = (room & 15) << 9, oy = (room >> 4 & 15) << 9;
+  int ox, oy;
+  HdFx_RoomOrigin(room, &ox, &oy);
   if (g_lava_room != room) {
     g_lava_room = room;
     memset(g_lava_known, 0, sizeof(g_lava_known));
     memset(g_lava_vis, 0, sizeof(g_lava_vis));
   }
+  static const int8 kDir[8][2] = { {-1,-1},{0,-1},{1,-1},{-1,0},{1,0},{-1,1},{0,1},{1,1} };
   for (int layer = 0; layer < 2; layer++) {
     const uint16 *tm = layer ? dung_bg1 : dung_bg2;
+    // Lava on the grid of every other tile, and its pools (touching at two
+    // tiles of distance, as the neighbours below). A small pool (the smithy's
+    // forge, a brazier) is a fire, not a lake: the lights of a lake shrink at
+    // its edges, and a pool that is all edge gave almost no light
+    static uint8 is_lava[32][32], pool_of[32][32];
+    static uint16 stack[32 * 32];
+    static int pool_n[256], pool_x[256], pool_y[256];
+    static bool pool_shows[256];
+    int num_pools = 0;
+    for (int r = 0; r < 32; r++)
+      for (int c = 0; c < 32; c++)
+        is_lava[r][c] = IsLavaCell(tm, r * 2, c * 2, ox, oy), pool_of[r][c] = 0xff;
+    for (int r = 0; r < 32; r++) {
+      for (int c = 0; c < 32; c++) {
+        if (!is_lava[r][c] || pool_of[r][c] != 0xff || num_pools >= 255)
+          continue;
+        int p = num_pools++, sp = 0;
+        pool_n[p] = pool_x[p] = pool_y[p] = 0;
+        pool_of[r][c] = p, stack[sp++] = r * 32 + c;
+        while (sp) {
+          int cell = stack[--sp], cr = cell >> 5, cc = cell & 31;
+          pool_n[p]++, pool_x[p] += cc, pool_y[p] += cr;
+          for (int k = 0; k < 8; k++) {
+            int nr = cr + kDir[k][1], nc = cc + kDir[k][0];
+            if (nr >= 0 && nc >= 0 && nr < 32 && nc < 32 && is_lava[nr][nc] && pool_of[nr][nc] == 0xff)
+              pool_of[nr][nc] = p, stack[sp++] = nr * 32 + nc;
+          }
+        }
+        pool_shows[p] = false;
+      }
+    }
     for (int row = 0; row < 64; row += 2) {
       for (int col = 0; col < 64; col += 2) {
-        if (!IsLavaCell(tm, row, col, ox, oy))
+        if (!is_lava[row >> 1][col >> 1])
           continue;
         int sx = ox + col * 8 + 4 - cam_x + ext, sy = oy + row * 8 + 4 - cam_y;
         // solo vicino allo schermo: in alcune stanze (Rocca Tartaruga) la lava
@@ -823,27 +873,22 @@ static void CollectLavaLights(const uint8 *pixels, int pitch, int width, int hei
         // punti visibili e' rosso-arancio
         if (!LavaShows(pixels, pitch, width, height, sx, sy, layer, row, col))
           continue;
+        int pool = pool_of[row >> 1][col >> 1];
+        if (pool != 0xff && pool_n[pool] <= kSmallLavaPool) {
+          pool_shows[pool] = true;  // one light for the whole pool, below
+          continue;
+        }
         // vicini a due tile di distanza: quanti sono lava e da che parte
         int n = 0, dx = 0, dy = 0;
         for (int k = 0; k < 8; k++) {
-          static const int8 kDir[8][2] = { {-1,-1},{0,-1},{1,-1},{-1,0},{1,0},{-1,1},{0,1},{1,1} };
-          if (IsLavaCell(tm, row + kDir[k][1] * 2, col + kDir[k][0] * 2, ox, oy))
+          int nr = (row >> 1) + kDir[k][1], nc = (col >> 1) + kDir[k][0];
+          if (nr >= 0 && nc >= 0 && nr < 32 && nc < 32 && is_lava[nr][nc])
             n++, dx += kDir[k][0], dy += kDir[k][1];
         }
         float inner = n / 8.0f;  // 1 in mezzo alla pozza, meno sul bordo
         // Le fiamme di torce e bracieri hanno gia' il loro alone
-        bool near_decor = false;
-        for (int i = 0; i < g_num_decor && !near_decor; i++)
-          near_decor = abs(g_decor[i].x - (col * 8 + 4)) < 16 && abs(g_decor[i].y - (row * 8 + 4)) < 16;
-        if (near_decor)
+        if (NearDecor(col * 8 + 4, row * 8 + 4))
           continue;
-        if (n == 0) {
-          // da sola non e' una pozza ma una fiamma che non si e' riconosciuta
-          // fra le torce (per esempio i bracieri della casa del vecchio sulla
-          // Montagna della Morte): la luce di una torcia
-          TorchLight(sx + 4, sy + 4, FlamePulse(t * 0.5f, (col * 7 + row * 13) * 0.1f), dark, 0);
-          continue;
-        }
         float pulse = 0.85f + 0.15f * sinf(t * 0.9f + (col + row) * 0.6f);
         // le luci a due tile di distanza si sommano (circa quattro per punto)
         float m = (dark ? 1.4f : 1.0f) * (0.35f + 0.65f * inner);
@@ -851,6 +896,18 @@ static void CollectLavaLights(const uint8 *pixels, int pitch, int width, int hei
         AddFireLight(lx, ly, 26 * (0.5f + 0.5f * inner) * (dark ? 1.4f : 1.0f),
                      0.26f * pulse * m, 0.12f * pulse * m, 0.03f * pulse * m, 0.25f);
       }
+    }
+    // Small pools: the light of a torch from their middle, larger with the
+    // pool (a single cell is a flame not found among the torches, for
+    // example the braziers of the old man's house on Death Mountain)
+    for (int p = 0; p < num_pools; p++) {
+      if (!pool_shows[p])
+        continue;
+      int cx = pool_x[p] * 16 / pool_n[p] + 8, cy = pool_y[p] * 16 / pool_n[p] + 8;
+      if (NearDecor(cx, cy))
+        continue;
+      float pulse = FlamePulse(t * 0.5f, ((cx >> 3) * 7 + (cy >> 3) * 13) * 0.1f);
+      TorchLightSized(ox + cx - cam_x + ext, oy + cy - cam_y, pulse, dark, 0, 1.0f + 0.25f * (pool_n[p] - 1));
     }
   }
 }

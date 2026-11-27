@@ -2,6 +2,7 @@
 #include "zelda_rtl.h"
 #include "variables.h"
 #include "misc.h"
+#include "ending.h"
 #include "nmi.h"
 #include "poly.h"
 #include "attract.h"
@@ -471,6 +472,7 @@ int LinkOam_DrawnHeight(void);        // player_oam.c
 extern uint8 g_link_oam_mask[128], g_link_oam_real_f0[128], g_sprite_oam_owner[128], g_oam_real_f0[128];
 extern uint8 g_ancilla_oam_owner[128];  // ancilla.c
 extern uint16 g_ancilla_oam_frame[128];
+extern uint16 g_follower_drawn_x, g_follower_drawn_y, g_follower_drawn_frame;  // tagalong.c
 
 // Fra v + k*period sceglie il valore la cui posizione sullo schermo (v - bias)
 // cade nella finestra [lo, lo + period)
@@ -491,8 +493,40 @@ static int WrapInto(int v, int period, int bias, int lo) {
 //   Link fanno eccezione: il gioco scrive
 //   il 9° bit dando per scontato che Link sia sullo schermo, quindi si prende
 //   il valore (a passi di 256) piu' vicino a Link.
+// Ending scenes on the wide screen: a piece with x 256-511 (9 bits) is off
+// the SNES screen on either side, and the PPU took the ones past the right
+// band for the left one. The two boys at the right of the Kakariko scene, off
+// the screen, showed at its left edge: each piece goes to the side where a
+// figure of the scene is (Credits_SceneSpriteCount)
+static bool ResolveEndingSpriteX(Ppu *ppu) {
+  if (main_module_index != 26 || submodule_index >= 32 || !(submodule_index & 1) ||
+      ppu->extraLeftRight == 0 || ppu->objBiasX != 0 || ppu->objBiasY != 0)
+    return false;
+  int ox[16], n = Credits_SceneSpriteCount();
+  for (int k = 0; k < n; k++)
+    ox[k] = (int16)((sprite_x_hi[k] << 8 | sprite_x_lo[k]) - BG2HOFS_copy2);
+  for (int i = 0; i < 128; i++) {
+    int x = (ppu->oam[i * 2] & 0xff) + (ppu->oam[0x100 + (i >> 3)] >> ((i & 7) * 2) & 1) * 256;
+    if (x >= 256) {
+      int best = 1 << 30, at = x;
+      for (int c = 0; c < 2; c++)
+        for (int k = 0; k < n; k++) {
+          int d = abs(x - c * 512 - ox[k]);
+          if (d < best)
+            best = d, at = x - c * 512;
+        }
+      x = at;
+    }
+    ppu->objX[i] = (int16)x;
+  }
+  ppu->objXValid = true;
+  return true;
+}
+
 static void ResolveSpritePositions(Ppu *ppu) {
   ppu->objYValid = ppu->objXValid = false;
+  if (ResolveEndingSpriteX(ppu))
+    return;
   // col mondo continuo anche senza spostamento: i nemici fuori dallo schermo
   // del gioco hanno la posizione vera (SetOamHelper0 non li nasconde)
   if (ppu->objBiasY == 0 && ppu->objBiasX == 0 && !g_view_valid && !(g_trans_link_dx | g_trans_link_dy))
@@ -519,6 +553,11 @@ static void ResolveSpritePositions(Ppu *ppu) {
   // its pieces are still on the screen this frame. Without it they took the
   // nearest object, 256 pixels away (a Death Mountain rock at the bottom of
   // the screen showed for one frame at the top, without its shadow)
+  // Link's companion (the purple chest, Zelda, the old man...), drawn where
+  // Link was a few steps ago: jumping down a ledge behind Link the chest took
+  // another object 256 pixels up and vanished off the screen for 15 frames
+  if (g_follower_drawn_frame == (frame_counter | 0x100) && follower_indicator)
+    oy[n] = (int16)(g_follower_drawn_y + 8 - cy), ox[n++] = (int16)(g_follower_drawn_x - cx);
   bool drew[16] = { 0 };
   for (int i = 0; i < 128; i++)
     if (g_sprite_oam_owner[i] < 16)
@@ -688,6 +727,7 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
   g_zenv.ppu->bg3MaxDigits = (enhanced_features0 & kFeatures0_ShowMaxItemsInYellow) && g_zenv.ppu->mode != 7;
   if (g_zenv.ppu->bg3MaxDigits)
     g_zenv.ppu->cgram[0x10] = 0x2b7f;
+  HdFx_GreyBeforeRender(g_zenv.ppu);
   HdWorld_WarpLine(0);
   for (int i = 0; i <= height; i++) {
     if (i == 128 && irq_flag) {
@@ -707,6 +747,7 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
     SimpleHdma_DoLine(&hdma_chans[1]);
     HdWorld_WarpLine(i + 1);
   }
+  HdFx_GreyAfterRender(g_zenv.ppu);
   HdWorld_WarpAfterRender();
   HdFx_FadeAfterRender(g_zenv.ppu);
   if (g_zenv.ppu->bg3MaxDigits)
@@ -1649,6 +1690,52 @@ void Rewind_End(void) {
   ZeldaApuUnlock();
 }
 
+// The ending as on the SNES, from the text in the Triforce room to the Master
+// Sword scene (measured with Snes9x): there the big 3D Triforce takes two
+// frames to draw (steps 9-10) and one while Link walks up to it (11-12); the
+// white flash (13) takes three frames a step and every scene of the ending
+// takes 40 to 60 frames to load, the screen black. The C game does all of it
+// in one frame, so its pictures ran up to 17 s ahead of the music. A lag frame
+// runs nothing and keeps the picture, while the music goes on. The loads also
+// make up for the music running at 534 samples a frame here and 533.1 on the
+// SNES (32040 Hz at 60.0988 fps): the scenes begin with the same note.
+enum { kSnesLag_Room = 0x40, kSnesLag_Ending = 0x80 };
+static const uint8 kSnesLag_Load[17] = {
+  59, 46, 58, 54, 58, 59, 54, 57, 57, 60, 47, 45, 58, 58, 58, 52, 38,
+};
+
+static uint8 SnesLag_Key(void) {
+  if (main_module_index == 25 && subsubmodule_index >= 9 && subsubmodule_index <= 14)
+    return kSnesLag_Room | subsubmodule_index;
+  if (main_module_index == 26 && submodule_index <= 0x20)
+    return kSnesLag_Ending | submodule_index;
+  return 0;
+}
+
+// true: this frame is one of the SNES lag frames
+static bool SnesLag_Hold(void) {
+  uint8 key = SnesLag_Key();
+  if (key != g_snes_lag_key) {
+    g_snes_lag_key = key;
+    g_snes_lag_hold = (key == (kSnesLag_Room | 13) || key == (kSnesLag_Room | 14)) ? 1 :
+        (key & 0x81) == kSnesLag_Ending ? kSnesLag_Load[(key & 0x3f) >> 1] : 0;
+  }
+  if (!g_snes_lag_hold)
+    return false;
+  g_snes_lag_hold--;
+  return true;
+}
+
+// whether the 3D Triforce is drawn this frame: -1 = as the game decides
+static int SnesLag_Poly(void) {
+  uint8 key = g_snes_lag_key;
+  if (key == (kSnesLag_Room | 9) || key == (kSnesLag_Room | 10))
+    return (g_snes_lag_poly ^= 1);
+  if (key >= (kSnesLag_Room | 11) && key <= (kSnesLag_Room | 13))
+    return 1;
+  return -1;
+}
+
 bool ZeldaRunFrame(int inputs) {
 
   // Avoid up/down and left/right from being pressed at the same time
@@ -1713,6 +1800,14 @@ bool ZeldaRunFrame(int inputs) {
     EmuSyncMemoryRegion(&g_ram[kRam_CrystalRotateCounter], 1);
   }
 
+  if (SnesLag_Hold()) {
+    ZeldaPushApuState();
+    return is_replay;
+  }
+  int poly = SnesLag_Poly();
+  if (poly >= 0)
+    run_what = (is_nmi_thread_active && poly) ? 3 : 1;
+
   Cheats_BeforeFrame();
   if (g_emu_runframe == NULL || enhanced_features0 != 0 || g_zenv.dialogue_flags) {
     // can't compare against real impl when running with extra features.
@@ -1721,6 +1816,9 @@ bool ZeldaRunFrame(int inputs) {
     g_emu_runframe(inputs, run_what);
   }
   Cheats_AfterFrame();
+  // the white flash: two lag frames after each of its steps
+  if (g_snes_lag_key == (kSnesLag_Room | 13) && SnesLag_Key() == g_snes_lag_key)
+    g_snes_lag_hold = 2;
 
   ZeldaPushApuState();
   // the still room is remembered every game frame, also the ones not drawn

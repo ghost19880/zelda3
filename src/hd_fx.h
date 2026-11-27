@@ -153,6 +153,9 @@ bool HdFx_DungWarpAt(int wx, int wy);
 // Unica regola per tutto cio' che legge le caselle della stanza (luci, raggi,
 // buche, acqua): non usare dungeon_room_index per questo
 int HdFx_LoadedRoom(void);
+// World origin of a room's 512x512 map. Rooms 0x100 and up (houses, caves,
+// the smithy) lie below the others: bit 8 counts in y
+void HdFx_RoomOrigin(int room, int *ox, int *oy);
 // Scritta a fine Dungeon_LoadRoom (dungeon.c); -1 = non si sa
 extern int g_hd_loaded_room;
 // One rule for every dynamic light that belongs to the tiles of the place
@@ -183,8 +186,11 @@ void HdFx_MenuBlur(uint8 *pixels, int pitch, int width, int height);
 // Flicker (0.72-1) of the hobo's campfire, sprite k, in step with its flame
 float HdFx_CampfirePulse(int k);
 // Under the options menu: the whole frame blurred, the interface (HUD, item
-// menu) too; amount 0-1
+// menu) too; amount 0-1. The game already blurred by HdFx_MenuBlur in this
+// draw gets only what is missing
 void HdFx_BlurAll(uint8 *pixels, int pitch, int width, int height, float amount);
+// How much HdFx_MenuBlur darkened the game in this draw (1 = not at all)
+float HdFx_GameDark(void);
 // Sfocatura in corso: lo shader non si applica finche' c'e'
 bool HdFx_MenuBlurActive(void);
 // How much of the menu blur is on screen (0 = none, 1 = full)
@@ -239,6 +245,12 @@ void HdFx_ShadowsAfterRender(Ppu *ppu);
 // Cespugli congelati sollevati o lanciati e i loro pezzi (hd_burn.c): la PPU
 // li disegna con i blu dei nemici congelati
 void HdFx_IceBeforeRender(Ppu *ppu);
+// Fewer flashes (GBA): enemies with the palette bits of obj_prio set (hit,
+// Kholdstare out of its shell, electric Buzzblob) drawn in the GBA's grey.
+// Right around the drawing of the lines (it writes colour 0 of four sprite
+// palettes, AfterRender puts them back)
+void HdFx_GreyBeforeRender(Ppu *ppu);
+void HdFx_GreyAfterRender(Ppu *ppu);
 // Link sott'acqua al chiuso: la PPU lo mescola con l'acqua come su GBA
 void HdFx_DiveBeforeRender(Ppu *ppu);
 // Super bomba che si gonfia e si sgonfia come su GBA (scala della sua voce OAM)
